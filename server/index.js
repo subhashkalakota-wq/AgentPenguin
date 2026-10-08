@@ -9,7 +9,7 @@ import { createClient } from '@supabase/supabase-js';
 import { connectToUserChrome } from './cdpClient.js';
 import { fetchGuestJobs } from './linkedinFeed.js';
 import { filterJobsWithLLM } from './llmFilter.js';
-import { applyToJobWithPlaywright } from './playwrightApplier.js';
+import { applyToJobWithPlaywright, discardEasyApply } from './playwrightApplier.js';
 import {
   PLATFORMS,
   PLATFORM_KEYS,
@@ -125,6 +125,11 @@ function addLog(type, tag, message) {
   };
   logs.push(logItem);
   broadcastEvent('log', logItem);
+  // Keep a copy on disk so runs can be diagnosed later
+  try {
+    fs.mkdirSync(path.resolve('server/data'), { recursive: true });
+    fs.appendFileSync(path.resolve('server/data/agent.log'), `${new Date().toISOString()} [${tag}] ${message}\n`);
+  } catch { /* ignore */ }
   return logItem;
 }
 
@@ -493,6 +498,8 @@ async function runAutonomousLoop() {
             }
           }
         } finally {
+          // Stopped mid-form? Discard the draft before closing so LinkedIn doesn't save it
+          if (key === 'linkedin') await discardEasyApply(page).catch(() => {});
           await page.close().catch(() => {});
         }
       };

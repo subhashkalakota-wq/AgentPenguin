@@ -30,17 +30,33 @@ async function clickButton(scope, pattern) {
   return false;
 }
 
+// LinkedIn asks "Save this application?" when a form is closed; always answer Discard
+// so unfinished applications are never left behind as saved drafts.
+async function answerSavePrompt(page) {
+  for (let i = 0; i < 6; i++) {
+    const discard = page.locator('button', { hasText: /^\s*Discard\s*$/ }).last();
+    if (await discard.isVisible().catch(() => false)) {
+      await discard.click().catch(() => {});
+      await randomSleep(500, 800);
+      return true;
+    }
+    await randomSleep(300, 400);
+  }
+  return false;
+}
+
 // Closes an unfinished application and discards the draft
-async function discardEasyApply(page) {
+export async function discardEasyApply(page) {
   try {
+    if (!page || page.isClosed()) return;
+    if (await answerSavePrompt(page).catch(() => false)) return;
     const dialog = await getDialog(page);
     if (!dialog) return;
     const dismiss = dialog.locator('button[aria-label*="Dismiss"], button[aria-label*="Close"]').first();
     if (await dismiss.isVisible().catch(() => false)) await dismiss.click().catch(() => {});
     else await page.keyboard.press('Escape').catch(() => {});
-    await randomSleep(900, 1300);
-    await clickButton(page, /^Discard/);
-    await randomSleep(500, 800);
+    await randomSleep(700, 1000);
+    await answerSavePrompt(page);
   } catch { /* best effort */ }
 }
 
@@ -303,18 +319,34 @@ export async function applyToJobWithPlaywright(page, job, profile, options = {},
           return { success: false, reason: 'dry_run', reachedSubmit: true };
         }
         onProgress({ type: 'playwright', tag: 'SUBMITTING', message: `Submitting application to ${job.company}...` });
+        await submit.scrollIntoViewIfNeeded().catch(() => {});
         await submit.click();
-        await randomSleep(3000, 4000);
 
-        const sent = await page.getByText(/application (was )?sent|application submitted/i).first().isVisible().catch(() => false);
-        await clickButton(page, /^(Done|Close)$/);
-        if (!sent) {
-          const stillOpen = await getDialog(page);
-          if (stillOpen && (await visibleErrors(stillOpen)).length) {
-            onProgress({ type: 'warn', tag: 'NOT SENT', message: `LinkedIn didn't accept the application to ${job.company}. Added to Needs review.` });
-            await discardEasyApply(page);
-            return { success: false, reason: 'unconfirmed' };
+        // Wait for LinkedIn's confirmation; click Submit again if it's still there
+        const confirmation = page.getByText(/your application was sent|application (was )?sent|application submitted|you applied/i).first();
+        let sent = false;
+        for (let t = 0; t < 20 && !sent; t++) {
+          await randomSleep(500, 600);
+          sent = await confirmation.isVisible().catch(() => false);
+          if (!sent && t === 8) {
+            const again = page.locator('dialog[open] button', { hasText: /^Submit( application)?$/i }).first();
+            if (await again.isVisible().catch(() => false)) await again.click().catch(() => {});
           }
+        }
+        if (!sent) {
+          // No confirmation and the form is gone: check the job page itself
+          if (!(await getDialog(page))) {
+            await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+            await randomSleep(2500, 3500);
+            sent = await page.getByText(/^Applied\b|application submitted|you applied/i).first().isVisible().catch(() => false);
+          }
+        }
+        await clickButton(page, /^(Done|Close|Not now)$/);
+        if (!sent) {
+          const errs = await getDialog(page) ? await invalidInputs(await getDialog(page)) : [];
+          onProgress({ type: 'warn', tag: 'NOT SENT', message: `LinkedIn didn't confirm the application to ${job.company}${errs[0] ? ` ("${errs[0].message}")` : ''}. Added to Needs review.` });
+          await discardEasyApply(page);
+          return { success: false, reason: 'unconfirmed' };
         }
         const actualPacingSec = Number((pacingDelaySec + (Math.random() * 2.5 - 1)).toFixed(1));
         onProgress({ type: 'success', tag: 'SUBMITTED', message: `✅ Applied to ${job.company} — "${job.title}". Waiting ${actualPacingSec}s before the next job...` });
