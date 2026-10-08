@@ -84,7 +84,8 @@ export async function blockedReason(page) {
   const title = await page.title().catch(() => '');
   if (/access denied|^blocked\b|blocked - indeed|just a moment|attention required/i.test(title)) return 'verification_required';
   const body = await page.evaluate(() => (document.body?.innerText || '').slice(0, 2000)).catch(() => '');
-  if (/verify you are human|additional verification required|security check|request blocked/i.test(body)) return 'verification_required';
+  // Strong phrases only: job descriptions can mention a "background security check"
+  if (/verify you are human|additional verification required|request blocked|quick security check/i.test(body)) return 'verification_required';
   return null;
 }
 
@@ -108,8 +109,9 @@ export async function scrapeNaukriJobs(page, query, location, maxJobs = 40, roun
 
   for (let pageNum = firstPage; pageNum < firstPage + maxPages && results.length < maxJobs; pageNum++) {
     if (page.isClosed()) break;
-    const pathSlug = `${slugify(query)}-jobs${city ? `-in-${slugify(city)}` : ''}${pageNum > 1 ? `-${pageNum}` : ''}`;
-    const url = `https://www.naukri.com/${pathSlug}?k=${encodeURIComponent(query)}${city ? `&l=${encodeURIComponent(city)}` : ''}`;
+    // Naukri redirects "/…-jobs-in-city-2" back to page 1; the pageNo parameter is what it honours
+    const pathSlug = `${slugify(query)}-jobs${city ? `-in-${slugify(city)}` : ''}`;
+    const url = `https://www.naukri.com/${pathSlug}?k=${encodeURIComponent(query)}${city ? `&l=${encodeURIComponent(city)}` : ''}${pageNum > 1 ? `&pageNo=${pageNum}` : ''}`;
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
     await page.waitForSelector('.srp-jobtuple-wrapper, article.jobTuple, .cust-job-tuple', { timeout: 12000 }).catch(() => {});
     await randomSleep(1200, 2000);
@@ -198,19 +200,23 @@ export async function scrapeIndeedJobs(page, query, location, maxJobs = 40, roun
     if (blocked) throw blockedError(blocked);
 
     const cards = await page.evaluate((originArg) => {
-      const nodes = Array.from(document.querySelectorAll('.job_seen_beacon, .cardOutline, .resultContent'));
+      // One card per job (the outer .job_seen_beacon when present)
+      const beacons = Array.from(document.querySelectorAll('.job_seen_beacon'));
+      const nodes = beacons.length ? beacons : Array.from(document.querySelectorAll('.cardOutline, .resultContent'));
       const out = [];
       for (const card of nodes) {
-        const link = card.querySelector('a[data-jk], h2.jobTitle a');
+        const link = card.querySelector('a[data-jk], .jobTitle a');
         const jk = link?.getAttribute('data-jk') || (link?.getAttribute('href') || '').match(/jk=([a-f0-9]+)/i)?.[1];
         if (!jk) continue;
-        const titleEl = card.querySelector('h2.jobTitle span[title], h2.jobTitle a span, h2.jobTitle');
+        // Indeed moved titles from <h2> to <h3>; read the title whichever heading it uses
+        const titleEl = card.querySelector('.jobTitle span[title], span[id^="jobTitle"], .jobTitle a span, .jobTitle');
+        const fromLabel = (link?.getAttribute('aria-label') || '').replace(/^full details of\s*/i, '');
         const companyEl = card.querySelector('[data-testid="company-name"], .companyName');
         const locEl = card.querySelector('[data-testid="text-location"], .companyLocation');
         const salEl = card.querySelector('[data-testid="attribute_snippet_testid"], .salary-snippet-container');
         out.push({
           jk,
-          title: titleEl?.innerText?.trim() || '',
+          title: titleEl?.innerText?.trim() || fromLabel.trim(),
           company: companyEl?.innerText?.trim() || '',
           location: locEl?.innerText?.trim() || '',
           salary: salEl?.innerText?.trim() || '',

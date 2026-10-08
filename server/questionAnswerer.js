@@ -217,6 +217,11 @@ function ruleAnswer({ question, type, options = [] }, profile) {
     const tech = q.match(/.*\b(?:with|in|using)\s+([a-z0-9+#. /-]{2,40}?)\??$/)?.[1];
     const generic = !tech || /^(total|overall|relevant|professional|the industry|this field|software|it|the it industry|industry)$/.test(tech.trim());
     const years = generic ? Math.round(ra.totalExperienceYears || 0) : resumeSkillYears(tech, ra);
+    // "Do you have production experience with X?" in a text box wants Yes / No, not a number
+    if (!isChoice && type !== 'number' && /^(do|did|have|has|are|is|can|could|would|will)\b/.test(q)) {
+      const listed = generic ? years > 0 : (years > 0 || (ra.skills || []).some(sk => tech && norm(sk.name) && (tech.includes(norm(sk.name)) || norm(sk.name).includes(tech.trim()))));
+      return listed ? `Yes${years ? ` — ${years} year${years === 1 ? '' : 's'}` : ' — from my projects'}` : 'No';
+    }
     return answerYears(years, type, options, isChoice);
   }
   if (ra && /(have you|did you) (complete|completed|earn|earned|obtain)|do you (have|hold) a/.test(q) && /bachelor|degree|graduat|b\.?tech|master/.test(q)) {
@@ -259,7 +264,13 @@ function ruleAnswer({ question, type, options = [] }, profile) {
   }
 
   if (/notice period/.test(q)) return type === 'number' ? noticeDays(profile) : (isChoice ? null : (profile.noticePeriod || null));
-  if (/(expected|desired|current).*(salary|ctc|compensation)|salary expectation|(ctc|salary) (in|per)/.test(q)) {
+  // Start date / availability ("When would you be available to start?")
+  if (/when (would|can|could) you (be available to )?(start|join)|available to (start|join)|earliest (start|joining) date|how soon can you (start|join)|joining date/.test(q)) {
+    if (type === 'number') return noticeDays(profile);
+    if (isChoice) return pickOption(options, 'Immediately', 'Within a week', '1 week', '2 weeks', 'Within 15 days', '15 days', '1 month', '30 days');
+    return profile.noticePeriod || 'Immediately';
+  }
+  if (/(expected|desired|current).*(salary|ctc|compensation|pay)|(salary|compensation|pay|ctc) expectation|(ctc|salary) (in|per)/.test(q)) {
     const n = salaryNumber(profile);
     // "…in LPA / lakhs": answer in lakhs (6), not rupees (600000)
     const inLakhs = /\blpa\b|lakh|lac\b/.test(q);
@@ -273,7 +284,7 @@ function ruleAnswer({ question, type, options = [] }, profile) {
   if (/english/.test(q) && /proficien|level|fluent/.test(q)) {
     return isChoice ? pickOption(options, 'Professional', 'Fluent', 'Native', 'Advanced') : 'Professional';
   }
-  if (/background check|drug (test|screen)|comfortable|willing|able to start|are you available|agree|consent|terms/.test(q)) return yes();
+  if (/background check|drug (test|screen)|comfortable|willing|\bable to start|are you available|agree|consent|terms/.test(q)) return yes();
 
   // Self-identification (EEO): always decline when offered; never guess
   if (isSelfId(question, options)) return isChoice || type === 'multi' ? declineOption(options) : null;
@@ -354,7 +365,21 @@ async function llmAnswer({ question, type, options = [] }, profile, { mustAnswer
 // Last resort for REQUIRED fields so the application isn't blocked:
 // choices -> "Yes" if offered, else the first option; experience numbers -> 0 (truthful
 // for a skill not on the profile). Free-text stays unanswered (needs review).
+// Fields that need a specific kind of value (a link, an email, a phone number)
+const LINK_Q = /\burl\b|link|website|linkedin|github|portfolio|profile (url|link)/i;
+function fitsField(question, answer) {
+  const a = String(Array.isArray(answer) ? answer.join(', ') : answer ?? '').trim();
+  if (LINK_Q.test(question)) return /^(https?:\/\/|www\.)\S+$/i.test(a);
+  if (/e-?mail/i.test(question) && !/\b(why|how|what)\b/i.test(question)) return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(a);
+  return true;
+}
+
 function forcedAnswer({ question, type, options = [] }, profile) {
+  // Never fill a link / email box with a sentence: use the real value or leave it
+  if (!options.length && LINK_Q.test(question)) {
+    const q = norm(question);
+    return (/github/.test(q) ? profile.githubUrl : /portfolio|website/.test(q) ? (profile.portfolioUrl || profile.githubUrl) : profile.linkedinUrl) || null;
+  }
   // Gender / race / veteran / disability: only ever "decline", never a made-up identity
   if (isSelfId(question, options)) {
     const decline = declineOption(options);
@@ -467,6 +492,8 @@ export async function answerQuestion(field, profile, { force = false, job = null
     const answer = await llmAnswer(field, profile);
     if (answer != null) result = { answer, source: 'ai' };
   }
+  // A sentence in a link / email box would be wrong: drop it
+  if (result && !isChoice && field.type !== 'multi' && !fitsField(field.question, result.answer)) result = null;
   if (result) {
     cache.set(key, result);
     return result;
@@ -474,7 +501,7 @@ export async function answerQuestion(field, profile, { force = false, job = null
   // 4. Required field: ask the AI again, this time insisting on an answer
   if (force && !selfId) {
     const answer = await llmAnswer(field, profile, { mustAnswer: true }).catch(() => null);
-    if (answer != null) return { answer, source: 'ai' };
+    if (answer != null && fitsField(field.question, answer)) return { answer, source: 'ai' };
   }
   // 5. Last resort for required fields so the application can continue (not cached)
   if (force) {

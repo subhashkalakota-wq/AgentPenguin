@@ -501,13 +501,26 @@ export async function linkedInDescription(id) {
   }
 }
 
-// A human check (captcha / security verification) on the page or inside the form
+// A human check the user must solve: an open captcha challenge, an "I'm not a robot" box, or a
+// "verify you are human" page. Invisible score-only badges (e.g. reCAPTCHA's 256×60 badge that
+// Indeed loads on every apply page) are not checks and must not stop the application.
 async function humanCheck(page, dialog = null) {
   if (/\/checkpoint\/(challenge|lg)/.test(page.url())) return true;
   const scope = dialog || page.locator('body');
   return scope.evaluate((el) => {
-    if (el.querySelector('iframe[src*="captcha" i], iframe[title*="captcha" i], iframe[title*="challenge" i], iframe[src*="arkoselabs" i]')) return true;
-    return /verify (that )?you('|’)?re (a )?human|verify you are human|are you a robot|security verification|quick security check|complete the captcha/i.test((el.innerText || '').slice(0, 4000));
+    const shown = (f) => { const r = f.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(f).visibility !== 'hidden'; };
+    const big = (f) => { const r = f.getBoundingClientRect(); return r.width >= 280 && r.height >= 250; };
+    const text = (el.innerText || '').slice(0, 5000);
+    for (const f of el.querySelectorAll('iframe')) {
+      const src = (f.getAttribute('src') || '').toLowerCase();
+      const title = (f.getAttribute('title') || '').toLowerCase();
+      if (!shown(f)) continue;
+      // Challenge windows: reCAPTCHA image challenge, hCaptcha, Arkose, Cloudflare Turnstile
+      if (/recaptcha\/.*bframe|hcaptcha\.com.*(challenge|hcaptcha\.html)|arkoselabs|funcaptcha|challenges\.cloudflare\.com/.test(src) && (big(f) || /challenge|turnstile/.test(src + title))) return true;
+      // reCAPTCHA v2 checkbox (the badge is not a checkbox)
+      if (/recaptcha\/.*anchor/.test(src) && /i('|’)?m not a robot/i.test(text + title)) return true;
+    }
+    return /verify (that )?you('|’)?re (a )?human|verify you are human|are you a robot|i('|’)?m not a robot|security verification|quick security check|complete the captcha/i.test(text);
   }, null, { timeout: 3000 }).catch(() => false);
 }
 

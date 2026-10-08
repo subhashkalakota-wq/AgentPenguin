@@ -222,6 +222,42 @@ export async function applyNaukriJob(page, job, profile, options = {}, onProgres
 
 // ---------------- Indeed ----------------
 
+const INDEED_NEXT = /^(continue|next|review your application|review application)\b/i;
+const INDEED_SUBMIT = /^submit( your)? application/i;
+
+// Marks the step's main button and says whether it submits or moves on (null while loading)
+async function indeedAction(applyPage) {
+  return applyPage.evaluate(([nextSrc, submitSrc]) => {
+    const next = new RegExp(nextSrc, 'i');
+    const submit = new RegExp(submitSrc, 'i');
+    document.querySelectorAll('[data-pg-indeed-action]').forEach(e => e.removeAttribute('data-pg-indeed-action'));
+    const vis = (el) => !!(el.offsetParent || el.getClientRects().length);
+    const btns = Array.from(document.querySelectorAll('button, [role="button"], input[type="submit"]'))
+      .filter(b => vis(b) && !b.disabled && b.getAttribute('aria-disabled') !== 'true');
+    const label = (b) => (b.innerText || b.value || b.getAttribute('aria-label') || '').trim();
+    const s = btns.find(b => submit.test(label(b)));
+    if (s) { s.setAttribute('data-pg-indeed-action', '1'); return 'submit'; }
+    const n = btns.find(b => next.test(label(b)));
+    if (n) { n.setAttribute('data-pg-indeed-action', '1'); return 'next'; }
+    return null;
+  }, [INDEED_NEXT.source, INDEED_SUBMIT.source]).catch(() => null);
+}
+
+async function waitIndeedAction(applyPage, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const a = await indeedAction(applyPage);
+    if (a || Date.now() > deadline || applyPage.isClosed()) return a;
+    await randomSleep(500, 600);
+  }
+}
+
+// Clicks the marked button; falls back to a DOM click if a cookie banner covers it
+async function clickIndeed(applyPage) {
+  const btn = applyPage.locator('[data-pg-indeed-action]').first();
+  await btn.click({ timeout: 5000 }).catch(() => btn.evaluate(el => el.click()).catch(() => {}));
+}
+
 export async function applyIndeedJob(page, job, profile, options = {}, onProgress = () => {}) {
   if (!page || page.isClosed()) return { success: false, reason: 'tab_closed' };
   page.setDefaultTimeout(10000);
@@ -239,21 +275,36 @@ export async function applyIndeedJob(page, job, profile, options = {}, onProgres
     if (blocked) return review('verification_required', 'Indeed is asking for a human verification check.', 'HUMAN CHECK');
     if (!job.description) job.description = await pageDescription(page, ['#jobDescriptionText', '[class*="jobDescription" i]']);
 
-    const applyBtn = page.locator('#indeedApplyButton, button[id*="indeedApplyButton"], button[aria-label*="Apply now"]').first();
-    if (!(await applyBtn.count().catch(() => 0))) {
-      if (await page.getByText(/^applied$/i).count().catch(() => 0)) {
-        onProgress({ type: 'success', tag: 'ALREADY APPLIED', message: `Already applied to ${job.company} on Indeed. Skipping.` });
-        return { success: false, reason: 'already_applied' };
-      }
-      return review('external_apply', 'applies on the company website.', 'COMPANY WEBSITE');
+    // Indeed's own form: an "Apply now" link to smartapply.indeed.com (older pages: #indeedApplyButton).
+    // The company's site: "Apply on company site" → /applystart. The button loads a moment after the page.
+    let kind = null;
+    for (let t = 0; t < 20 && !kind; t++) {
+      kind = await page.evaluate(() => {
+        const vis = (el) => !!(el.offsetParent || el.getClientRects().length);
+        const els = Array.from(document.querySelectorAll('a, button, [role="button"]')).filter(vis);
+        const text = (el) => (el.innerText || el.getAttribute('aria-label') || '').trim();
+        const own = els.find(el => /smartapply\.indeed\.com|indeedapply/i.test(el.getAttribute('href') || '') || el.id === 'indeedApplyButton' || String(el.id).includes('indeedApplyButton')
+          || (/^apply now$/i.test(text(el)) && !/applystart/i.test(el.getAttribute('href') || '')));
+        if (own) { own.setAttribute('data-pg-indeed-apply', '1'); return 'indeed'; }
+        if (els.some(el => /apply on company site/i.test(text(el)) || /\/applystart/i.test(el.getAttribute('href') || ''))) return 'external';
+        if (els.some(el => /^applied$/i.test(text(el))) || /you applied|application submitted/i.test(document.body.innerText.slice(0, 3000))) return 'applied';
+        return null;
+      }).catch(() => null);
+      if (!kind) await randomSleep(400, 500);
     }
+    if (kind === 'applied') {
+      onProgress({ type: 'success', tag: 'ALREADY APPLIED', message: `Already applied to ${job.company} on Indeed. Skipping.` });
+      return { success: false, reason: 'already_applied' };
+    }
+    if (kind !== 'indeed') return review('external_apply', 'applies on the company website.', 'COMPANY WEBSITE');
 
-    // Indeed Apply opens in this tab or a new one
+    // Indeed Apply opens in this tab (current pages) or a new one (older pages)
     const popupPromise = page.context().waitForEvent('page', { timeout: 4000 }).catch(() => null);
-    await applyBtn.click({ timeout: 8000 }).catch(() => {});
+    await page.locator('[data-pg-indeed-apply]').first().click({ timeout: 8000 }).catch(() => {});
     popup = await popupPromise;
     const applyPage = popup || page;
     applyPage.setDefaultTimeout(10000);
+    if (!popup) await page.waitForURL(/smartapply\.indeed\.com|indeedapply/i, { timeout: 12000 }).catch(() => {});
     await applyPage.waitForLoadState('domcontentloaded').catch(() => {});
     await randomSleep(2000, 3000);
     onProgress({ type: 'playwright', tag: 'INDEED APPLY', message: `Started Indeed Apply for ${job.company}.` });
@@ -291,21 +342,21 @@ export async function applyIndeedJob(page, job, profile, options = {}, onProgres
       collect(out.needsInput);
       if (out.answered) onProgress({ type: 'llm', tag: `INDEED STEP ${step}`, message: `Filled ${out.answered} field${out.answered === 1 ? '' : 's'} for ${job.company}.` });
 
-      const submit = applyPage.getByRole('button', { name: /submit (your )?application/i }).first();
-      if (await submit.isVisible().catch(() => false)) {
+      // Indeed loads each step with a spinner: wait for Continue / Submit to appear (up to 15s)
+      const action = await waitIndeedAction(applyPage, 15000);
+      if (action === 'submit') {
         if (options.dryRun) {
           onProgress({ type: 'success', tag: 'DRY RUN', message: `Reached Submit for ${job.company} — not submitting (dry run).` });
           await closePopup();
           return { success: false, reason: 'dry_run', reachedSubmit: true };
         }
         onProgress({ type: 'playwright', tag: 'SUBMITTING', message: `Submitting application to ${job.company}...` });
-        await submit.click({ timeout: 8000 }).catch(() => {});
+        await clickIndeed(applyPage);
         await randomSleep(2500, 3500);
         continue;
       }
-      const next = applyPage.getByRole('button', { name: /^(continue|next|review your application)/i }).first();
-      if (await next.isVisible().catch(() => false)) {
-        await next.click({ timeout: 8000 }).catch(() => {});
+      if (action === 'next') {
+        await clickIndeed(applyPage);
         await randomSleep(1800, 2600);
         continue;
       }
