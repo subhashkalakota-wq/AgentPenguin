@@ -6,6 +6,9 @@ import OverviewTab from './components/OverviewTab';
 import PlatformPickerModal from './components/PlatformPickerModal';
 import PlatformsBanner from './components/PlatformsBanner';
 import MarketInsights from './components/MarketInsights';
+import MocksTab from './components/MocksTab';
+import AutomationTab from './components/AutomationTab';
+import ReviewFinishModal from './components/ReviewFinishModal';
 import { searchLocations } from '../shared/locations';
 import PenguinWelcome from './components/PenguinWelcome';
 import CdpReminder from './components/CdpReminder';
@@ -71,6 +74,8 @@ export default function App() {
       case '/activity':        return { view: 'dashboard', tab: 'activity' };
       case '/profile':         return { view: 'dashboard', tab: 'profile' };
       case '/cdp':             return { view: 'dashboard', tab: 'cdp' };
+      case '/mocks':           return { view: 'dashboard', tab: 'mocks' };
+      case '/automation':      return { view: 'dashboard', tab: 'automation' };
       case '/viso-dsa':        return { view: 'viso-dsa' };
       case '/resume-analyzer': return { view: 'resume-analyzer' };
       case '/config':
@@ -97,6 +102,7 @@ export default function App() {
   const [showPlatformPicker, setShowPlatformPicker] = useState(false);
   const [runProgress, setRunProgress] = useState(null);
   const [runWindow, setRunWindow] = useState('hidden'); // 'hidden' | 'open' | 'minimized'
+  const [reviewJob, setReviewJob] = useState(null); // "Needs review" job being finished
 
 
   const isProfilePageOpen = currentView === 'dashboard' && dashTab === 'profile';
@@ -700,6 +706,14 @@ export default function App() {
         onOpenProfile={() => { setIsConfigOpen(false); navigateTo('/profile'); }}
         onOpenCdp={() => { setIsConfigOpen(false); navigateTo('/cdp'); }}
       />
+      {reviewJob && (
+        <ReviewFinishModal
+          job={reviewJob}
+          profile={profile}
+          onSaveProfile={handleSaveProfile}
+          onClose={() => setReviewJob(null)}
+        />
+      )}
       <HowToRunModal
         isOpen={isHowToRunOpen}
         onClose={() => closeOverlay(['/how-to-run'], setIsHowToRunOpen)}
@@ -856,6 +870,7 @@ export default function App() {
             isProfileComplete={profileReady}
             onIncompleteProfile={() => navigateTo('/profile')}
             userName={profile?.name || currentUser?.user_metadata?.full_name || currentUser?.email || ''}
+            onFinishReview={(job) => setReviewJob(job)}
           />
           </>
         );
@@ -876,6 +891,10 @@ export default function App() {
             isProfileReady={profileReady}
           />
         );
+      case 'mocks':
+        return <MocksTab roles={Array.isArray(config.searchQueries) && config.searchQueries.length ? config.searchQueries : [config.searchQuery].filter(Boolean)} />;
+      case 'automation':
+        return <AutomationTab />;
       case 'cdp':
         return (
           <CdpTab
@@ -952,7 +971,7 @@ export default function App() {
       />
 
       <main className="dashboard-content pg-main">
-        {!profileReady && dashTab !== 'profile' && (
+        {!profileReady && dashTab !== 'profile' && dashTab !== 'mocks' && (
           <div className="pg-callout">
             <div>
               <strong>Finish your profile to start applying</strong>
@@ -970,7 +989,7 @@ export default function App() {
           </div>
         )}
 
-        {!detailPageJob && dashTab !== 'cdp' && (
+        {!detailPageJob && dashTab !== 'cdp' && dashTab !== 'mocks' && (
           <CdpReminder
             connected={cdpStatus.connected}
             onOpenCdp={() => openTab('cdp')}

@@ -103,6 +103,9 @@ export async function fetchUserAppliedJobsFromSupabase(user) {
         // Needs review: why the agent left it for the user
         reviewReason: row.status === 'needs_review' ? traceOf(row.playwright_trace)?.reviewReason || null : null,
         reviewDetail: row.status === 'needs_review' ? traceOf(row.playwright_trace)?.reviewDetail || '' : '',
+        reviewKind: row.status === 'needs_review' ? traceOf(row.playwright_trace)?.reviewKind || '' : '',
+        reviewQuestions: row.status === 'needs_review' ? traceOf(row.playwright_trace)?.questions || [] : [],
+        platform: traceOf(row.playwright_trace)?.platform || undefined,
         id: row.job_id || row.id,
         title: row.title,
         company: row.company,

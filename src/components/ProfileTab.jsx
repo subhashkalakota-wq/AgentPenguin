@@ -107,7 +107,8 @@ export default function ProfileTab({ profile, onSaveProfile, config, onSaveConfi
       return;
     }
     setSaving(true);
-    const { skillsText, rolesText, searchLocation, experienceLevel, maxApplications, pacingDelaySec, parallelTabs, screeningAnswers, ...rest } = draft;
+    // learnedAnswers are managed by "Finish" in Needs review; keep the current list, not the draft's copy
+    const { skillsText, rolesText, searchLocation, experienceLevel, maxApplications, pacingDelaySec, parallelTabs, screeningAnswers, learnedAnswers: _draftLearned, ...rest } = draft;
     const roleList = toList(rolesText);
     const nextProfile = {
       ...profile,
@@ -478,6 +479,39 @@ export default function ProfileTab({ profile, onSaveProfile, config, onSaveConfi
                 </div>
               ))}
             </dl>
+          )}
+        </section>
+
+        {/* Answers the user taught Penguin by finishing Needs review jobs */}
+        <section className="pg-card pg-span-2" id="learned-answers">
+          <div className="pg-card-head">
+            <div>
+              <h3 className="pg-card-title">Answers Penguin learned</h3>
+              <p className="pg-card-sub">Your answers from finishing "Needs review" jobs. Penguin uses them first whenever a form asks the same question.</p>
+            </div>
+          </div>
+          {(profile.learnedAnswers || []).length ? (
+            <ul className="pg-learned">
+              {(profile.learnedAnswers || []).slice().reverse().map(a => (
+                <li key={a.question}>
+                  <div>
+                    <span className="pg-learned-q">{a.question}</span>
+                    <strong>{Array.isArray(a.answer) ? a.answer.join(', ') : String(a.answer)}</strong>
+                  </div>
+                  <button
+                    type="button"
+                    className="pg-icon-btn"
+                    aria-label={`Forget answer to: ${a.question}`}
+                    title="Forget this answer"
+                    onClick={() => onSaveProfile({ ...profile, learnedAnswers: (profile.learnedAnswers || []).filter(x => x.question !== a.question) })}
+                  >
+                    <X size={14} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="pg-learned-empty">Nothing yet. When a job lands in Needs review, click "Answer & finish" in Applications. Your answers show up here.</p>
           )}
         </section>
 

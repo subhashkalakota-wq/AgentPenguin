@@ -105,6 +105,37 @@ const isSelfId = (question, options = []) => SELF_ID.test(question || '')
   || options.filter(o => /hispanic|latin[oa]|asian|black or african|white|native hawaiian|two or more races|\bmale\b|\bfemale\b|non-binary|veteran|disability/i.test(o)).length >= 2;
 const declineOption = (options = []) => options.find(o => /decline|don['’]?t wish|do not wish|prefer not|not to (say|answer|disclose|identify)|rather not|choose not/i.test(o)) || null;
 
+// ---- Answers the user taught Penguin (from finishing Needs review jobs) ----
+const STOP_WORDS = new Set(['the', 'you', 'your', 'are', 'have', 'with', 'for', 'and', 'this', 'that', 'what', 'how', 'many', 'any', 'job', 'role', 'please', 'our', 'can']);
+const wordsOf = (s) => new Set(norm(s).replace(/[^a-z0-9+# ]/g, ' ').split(' ').filter(w => w.length > 1 && !STOP_WORDS.has(w)));
+
+/** The user's own earlier answer to this question (same or near-identical wording), fitted to this field. */
+export function learnedAnswerFor({ question, type, options = [] }, learned = []) {
+  if (!Array.isArray(learned) || !learned.length || !question) return null;
+  const q = norm(question);
+  const qWords = wordsOf(question);
+  let best = null;
+  let bestScore = 0;
+  for (const l of learned) {
+    if (!l?.question || l.answer == null || l.answer === '' || (Array.isArray(l.answer) && !l.answer.length)) continue;
+    if (norm(l.question) === q) { best = l; bestScore = 1; break; }
+    const lWords = wordsOf(l.question);
+    const shared = [...lWords].filter(w => qWords.has(w)).length;
+    const score = shared / Math.max(1, new Set([...lWords, ...qWords]).size);
+    if (score > bestScore) { best = l; bestScore = score; }
+  }
+  if (!best || bestScore < 0.75) return null;
+  const ans = best.answer;
+  if (type === 'multi') {
+    const list = (Array.isArray(ans) ? ans : String(ans).split(/\s*[,;]\s*/)).map(a => pickOption(options, String(a))).filter(Boolean);
+    return list.length ? [...new Set(list)] : null;
+  }
+  const one = Array.isArray(ans) ? ans[0] : ans;
+  if (options.length) return pickOption(options, String(one));
+  if (type === 'number') return digits(one) || null;
+  return String(one);
+}
+
 // Rough annual number from strings like "₹22,00,000 / year (22 LPA)" or "22 LPA"
 function salaryNumber(profile) {
   const raw = String(profile.salaryFloor || '');
@@ -346,9 +377,13 @@ function forcedAnswer({ question, type, options = [] }, profile) {
  * @param field   { question, type, options }
  * @param profile candidate profile (incl. screeningAnswers)
  * @param opts    { force } — fill required fields even without a confident answer
- * @returns { answer, source: 'profile' | 'rules' | 'ai' | 'auto-pick' } | null
+ * @returns { answer, source: 'learned' | 'profile' | 'rules' | 'ai' | 'auto-pick' } | null
  */
 export async function answerQuestion(field, profile, { force = false } = {}) {
+  // 0. The user's own answer from an earlier Needs-review job always wins
+  const taught = learnedAnswerFor(field, profile.learnedAnswers);
+  if (taught != null) return { answer: taught, source: 'learned' };
+
   const key = `${norm(field.question)}|${field.type}|${(field.options || []).join('/')}`;
   if (cache.has(key)) return cache.get(key);
 

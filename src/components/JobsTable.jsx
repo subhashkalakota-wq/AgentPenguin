@@ -161,7 +161,8 @@ export default function JobsTable({
   onRefresh,
   isProfileComplete = true,
   onIncompleteProfile,
-  userName = ''
+  userName = '',
+  onFinishReview
 }) {
   const [filterTab, setFilterTabRaw] = useState('all');
   const [searchQuery, setSearchQueryRaw] = useState('');
@@ -508,6 +509,15 @@ export default function JobsTable({
                       <StatusBadge status={job.status} />
                       {job.status === 'needs_review' && job.reviewReason && (
                         <span className="pg-review-reason" title={job.reviewDetail || job.reviewReason}>{job.reviewReason}</span>
+                      )}
+                      {job.status === 'needs_review' && onFinishReview && (
+                        <button
+                          type="button"
+                          className="pg-finish-btn"
+                          onClick={(e) => { e.stopPropagation(); onFinishReview(job); }}
+                        >
+                          {job.reviewQuestions?.length ? `Answer ${job.reviewQuestions.length} & finish` : 'Finish'}
+                        </button>
                       )}
                     </td>
                     <td className="pg-col-date">

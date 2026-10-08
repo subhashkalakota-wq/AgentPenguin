@@ -312,6 +312,14 @@ function optionIndex(options, answer) {
 async function fillStep(dialog, profile, onProgress, { forceAll = false } = {}) {
   let answered = 0;
   const unanswered = [];
+  // Questions for the user if this job ends up in Needs review: ones Penguin couldn't
+  // answer, plus ones it had to guess (with the guess, so the user can confirm or fix it)
+  const needsInput = [];
+  const ask = (f, guess) => {
+    if (!f.question || f.question.length < 3) return;
+    const type = f.type === 'checkbox-group' ? 'multi' : f.type === 'checkbox' ? 'radio' : (f.type === 'text' && /how many|years|number of/i.test(f.question) ? 'number' : f.type);
+    needsInput.push({ question: f.question, type, options: f.type === 'checkbox' ? ['Yes', 'No'] : (f.options || []), ...(guess != null ? { guess } : {}) });
+  };
 
   // Resume: upload only if the step has a file input and no saved resume is chosen
   const fileInput = dialog.locator('input[type="file"]').first();
@@ -373,10 +381,11 @@ async function fillStep(dialog, profile, onProgress, { forceAll = false } = {}) 
     const asked = selfId && !/gender|race|ethnic|veteran|disabilit|hispanic|latin/i.test(f.question) ? `Self-identification (gender / race / veteran / disability): ${f.question}` : f.question;
     const result = await answerQuestion({ question: asked || 'Select one option', type: askType, options: f.options || [] }, profile, { force: f.required || forceAll });
     if (!result) {
-      if (f.required) unanswered.push(f.question || 'Unlabelled question');
+      if (f.required) { unanswered.push(f.question || 'Unlabelled question'); ask(f); }
       continue;
     }
     const { answer, source } = result;
+    if (source === 'auto-pick') ask(f, answer);
 
     if (f.type === 'select') {
       const i = optionIndex(f.options, answer);
@@ -386,7 +395,7 @@ async function fillStep(dialog, profile, onProgress, { forceAll = false } = {}) 
       const wanted = (Array.isArray(answer) ? answer : [answer]).map(a => optionIndex(f.options, a)).filter(i => i >= 0);
       let ticked = 0;
       for (const i of (wanted.length ? [...new Set(wanted)] : [0])) if (await clickChoice(dialog, `${f.key}-${i}`, { name: f.names?.[i], label: f.options[i] })) ticked++;
-      if (!ticked) { unanswered.push(f.question || 'A multiple-choice question'); continue; }
+      if (!ticked) { unanswered.push(f.question || 'A multiple-choice question'); ask(f); continue; }
     } else if (f.type === 'range') {
       // Slider: clamp to its range and fire the events a person's drag would
       const n = Number(String(answer).match(/\d+(\.\d+)?/)?.[0] ?? f.max);
@@ -402,6 +411,7 @@ async function fillStep(dialog, profile, onProgress, { forceAll = false } = {}) 
       if (i < 0) i = Math.max(0, optionIndex(f.options, 'Yes'));
       if (!(await clickChoice(dialog, `${f.key}-${i}`, { name: f.names?.[i], label: f.options[i] }))) {
         unanswered.push(f.question || 'A choice question');
+        ask(f);
         continue;
       }
     } else if (f.type === 'date') {
@@ -425,7 +435,7 @@ async function fillStep(dialog, profile, onProgress, { forceAll = false } = {}) 
       }
     }
     answered++;
-    const tags = { ai: 'AI ANSWER', profile: 'PROFILE ANSWER', rules: 'AUTO ANSWER', 'auto-pick': 'AUTO PICK' };
+    const tags = { ai: 'AI ANSWER', profile: 'PROFILE ANSWER', rules: 'AUTO ANSWER', 'auto-pick': 'AUTO PICK', learned: 'YOUR ANSWER' };
     onProgress({
       type: source === 'auto-pick' ? 'warn' : 'llm',
       tag: tags[source] || 'AUTO ANSWER',
@@ -433,7 +443,7 @@ async function fillStep(dialog, profile, onProgress, { forceAll = false } = {}) 
     });
     await randomSleep(250, 500);
   }
-  return { answered, unanswered };
+  return { answered, unanswered, needsInput };
 }
 
 // Inputs LinkedIn flagged (error text lives in the aria-describedby element)
@@ -497,10 +507,19 @@ export async function applyToJobWithPlaywright(page, job, profile, options = {},
   // No single page action may hang a tab: anything slower than this is treated as failed
   page.setDefaultTimeout(10000);
 
+  // Questions the user may need to answer, collected across every form step
+  const questions = new Map();
+  const collect = (list = []) => list.forEach(q => { if (!questions.has(q.question)) questions.set(q.question, q); });
+  const fill = async (dialog, opts) => {
+    const out = await fillStep(dialog, profile, onProgress, opts);
+    collect(out.needsInput);
+    return out;
+  };
+
   const review = async (reason, detail, tag = 'NEEDS REVIEW') => {
     onProgress({ type: 'warn', tag, message: `${job.company}: ${detail} Added to Needs review.` });
     await discardEasyApply(page);
-    return { success: false, reason, detail };
+    return { success: false, reason, detail, questions: [...questions.values()].slice(0, 15) };
   };
 
   onProgress({ type: 'playwright', tag: 'OPEN JOB', message: `Opening ${job.company} — "${job.title}"` });
@@ -554,7 +573,7 @@ export async function applyToJobWithPlaywright(page, job, profile, options = {},
         // answer every empty field (required or not), then try again — up to 3 times.
         await repairInvalid(dialog, profile, onProgress);
         if (sameStepCount <= 3) {
-          const { answered } = await fillStep(dialog, profile, onProgress, { forceAll: true });
+          const { answered } = await fill(dialog, { forceAll: true });
           const errs = await visibleErrors(dialog);
           onProgress({ type: 'llm', tag: 'RETRY STEP', message: `${job.company}: step ${progress} didn't move on${errs[0] ? ` ("${errs[0]}")` : ''} — answered ${answered} more field${answered === 1 ? '' : 's'}, trying again.` });
           const next = await findAction(dialog, { submit: false });
@@ -570,7 +589,7 @@ export async function applyToJobWithPlaywright(page, job, profile, options = {},
       // Final step: untick "follow company", then submit
       const submit = dialog.locator('button', { hasText: /^Submit( application)?$/i }).first();
       if (await submit.isVisible().catch(() => false)) {
-        await fillStep(dialog, profile, onProgress); // handles the follow checkbox + any last fields
+        await fill(dialog); // handles the follow checkbox + any last fields
         if (options.dryRun) {
           onProgress({ type: 'success', tag: 'DRY RUN', message: `Reached Submit for ${job.company} — not submitting (dry run).` });
           await discardEasyApply(page);
@@ -609,7 +628,7 @@ export async function applyToJobWithPlaywright(page, job, profile, options = {},
         return { success: true, pacingDelaySec: actualPacingSec };
       }
 
-      const { answered, unanswered } = await fillStep(dialog, profile, onProgress);
+      const { answered, unanswered } = await fill(dialog);
       if (answered) onProgress({ type: 'llm', tag: `STEP ${progress || step}`, message: `Filled ${answered} field${answered === 1 ? '' : 's'} for ${job.company}.` });
       if (unanswered.length) {
         // Try to move on anyway; if LinkedIn refuses, the retry above answers everything it can

@@ -10,6 +10,10 @@ import { connectToUserChrome, bridgeReady } from './cdpClient.js';
 import { fetchGuestJobs, experienceFilter } from './linkedinFeed.js';
 import { getMarketInsights } from './marketInsights.js';
 import { searchLocations, placeName } from '../shared/locations.js';
+import { loadState, saveState } from './state.js';
+import { notify, publicSettings, updateSettings, sendTest, detectTelegramChat, anyChannelOn } from './notifier.js';
+import { startScheduler, normalizeSchedule, nextRunLabel } from './scheduler.js';
+import { nextInterviewQuestion, evaluateAnswer, interviewSummary, generateTest } from './mocks.js';
 import { filterJobsWithLLM } from './llmFilter.js';
 import { applyToJobWithPlaywright, discardEasyApply } from './playwrightApplier.js';
 import {
@@ -139,6 +143,15 @@ let candidateProfile = {
   resumePath: null,
   autoSubmit: true
 };
+
+// Settings, profile and user saved by the last session (so scheduled runs work after a restart)
+{
+  const saved = loadState();
+  if (saved.config) config = { ...config, ...saved.config };
+  if (saved.profile) candidateProfile = { ...candidateProfile, ...saved.profile };
+  if (saved.userId) currentUserId = saved.userId;
+}
+const persistState = () => saveState({ config, profile: candidateProfile, userId: currentUserId });
 
 // Applies settings from the dashboard. Older clients send only `location`; newer ones the
 // `locations` list. `location` always mirrors the first entry for code that reads one place.
@@ -299,7 +312,9 @@ async function persistApplication(job, result) {
       logo: '',
       easy_apply: job.status === 'needs_review' ? result?.reason !== 'external_apply' : true,
       // Why it needs a person (shown in the Needs review tab)
-      playwright_trace: job.status === 'needs_review' ? JSON.stringify({ reviewReason: job.reviewReason, reviewDetail: job.reviewDetail || '' }) : null,
+      playwright_trace: job.status === 'needs_review'
+        ? JSON.stringify({ reviewReason: job.reviewReason, reviewDetail: job.reviewDetail || '', reviewKind: job.reviewKind || '', questions: job.reviewQuestions || [], platform: job.platform || '' })
+        : null,
     }, { onConflict: 'user_id,job_id' });
     addLog('cdp', 'SUPABASE SYNC', job.status === 'needs_review'
       ? `Saved ${job.company} to Needs review (${job.reviewReason}).`
@@ -329,6 +344,10 @@ function markNeedsReview(job, result) {
   job.status = 'needs_review';
   job.reviewReason = REVIEW_LABELS[result.reason] || 'Needs a look';
   job.reviewDetail = result.detail || '';
+  job.reviewKind = result.reason;
+  // The questions Penguin couldn't answer (the user answers them once in the dashboard)
+  job.reviewQuestions = Array.isArray(result.questions) ? result.questions : [];
+  currentRun?.review.push({ company: job.company, title: job.title, reason: job.reviewReason });
   broadcastEvent('jobs', jobs);
   persistApplication(job, result).catch(() => {});
 }
@@ -421,23 +440,11 @@ app.post('/api/cdp/launch', async (req, res) => {
 });
 
 // 4. Start Autonomous Application Run
-app.post('/api/start', async (req, res) => {
-  if (agentState === 'running') {
-    return res.json({ success: false, message: 'Agent is already running' });
-  }
-
-  if (req.body?.userId) currentUserId = req.body.userId;
-  if (await rejectIfBlocked(req, res)) return;
-  if (req.body?.config) mergeConfig(req.body.config);
-  if (req.body?.profile) candidateProfile = { ...candidateProfile, ...req.body.profile };
-
-  // Enforce mandatory resume upload
+// Checks a run can start: resume uploaded and analysed, chosen platforms open in Chrome
+async function prepareRun() {
   if (!candidateProfile?.resumeFile || !candidateProfile?.resumePath || !fs.existsSync(candidateProfile.resumePath)) {
     addLog('warn', 'RESUME MISSING', '❌ Action blocked: Resume upload is compulsory! Please complete your profile and upload your resume before starting.');
-    return res.json({ 
-      success: false, 
-      message: 'Resume upload is compulsory! Please upload your resume on your profile page before starting the agent.' 
-    });
+    return { ok: false, message: 'Resume upload is compulsory! Please upload your resume on your profile page before starting the agent.' };
   }
 
   // Screening answers come from the resume: make sure it has been analysed
@@ -456,24 +463,67 @@ app.post('/api/start', async (req, res) => {
     const picked = selectedPlatforms();
     const notOpen = picked.filter(k => !findPlatformPage(browser, k));
     if (notOpen.length === picked.length) {
-      return res.json({
-        success: false,
-        message: `${notOpen.map(k => PLATFORMS[k].label).join(', ')} ${notOpen.length === 1 ? 'is' : 'are'} not open in Chrome. Open and sign in first.`
-      });
+      return { ok: false, message: `${notOpen.map(k => PLATFORMS[k].label).join(', ')} ${notOpen.length === 1 ? 'is' : 'are'} not open in Chrome. Open and sign in first.` };
     }
   }
+  return { ok: true };
+}
 
+// The run in progress: what it sent and what it left for the user (for the summary alert)
+let currentRun = null;
+
+function beginRun({ cap = config.maxApplications, source = 'manual' } = {}) {
   agentState = 'running';
   broadcastEvent('agentState', agentState);
-  addLog('cdp', 'START RUN', `Penguin is running on ${selectedPlatforms().map(k => PLATFORMS[k].label).join(', ')} (cap: ${config.maxApplications}).`);
+  currentRun = { source, cap, startedAt: Date.now(), sent: [], review: [] };
+  addLog('cdp', 'START RUN', `${source === 'schedule' ? 'Scheduled run: ' : ''}Penguin is running on ${selectedPlatforms().map(k => PLATFORMS[k].label).join(', ')} (target: ${cap}).`);
+  runAutonomousLoop({ cap });
+}
 
-  res.json({ success: true, agentState });
+app.post('/api/start', async (req, res) => {
+  if (agentState === 'running') {
+    return res.json({ success: false, message: 'Agent is already running' });
+  }
 
-  // Run execution loop asynchronously
-  runAutonomousLoop();
+  if (req.body?.userId) currentUserId = req.body.userId;
+  if (await rejectIfBlocked(req, res)) return;
+  if (req.body?.config) mergeConfig(req.body.config);
+  if (req.body?.profile) candidateProfile = { ...candidateProfile, ...req.body.profile };
+  persistState();
+
+  const ready = await prepareRun();
+  if (!ready.ok) return res.json({ success: false, message: ready.message });
+
+  res.json({ success: true, agentState: 'running' });
+  beginRun({ cap: config.maxApplications });
 });
 
-async function runAutonomousLoop() {
+// Summary alert when a run ends (finished, stopped or failed)
+async function finishRun() {
+  const run = currentRun;
+  currentRun = null;
+  if (!run) return;
+  const sent = run.sent.length;
+  const verb = agentState === 'completed' ? 'finished' : 'stopped';
+  const subject = `${run.source === 'schedule' ? 'Scheduled run' : 'Run'} ${verb}: ${sent} sent${run.review.length ? `, ${run.review.length} need you` : ''}`;
+  const lines = [
+    ...(sent ? ['Sent:', ...run.sent.slice(0, 10).map(j => `• ${j.company} — ${j.title}`), ...(sent > 10 ? [`…and ${sent - 10} more`] : [])] : ['No applications were sent.']),
+    ...(run.review.length ? ['', 'Need you:', ...run.review.slice(0, 8).map(j => `• ${j.company} — ${j.reason}`)] : []),
+    '', 'Open Agent Penguin: http://localhost:5173/applications',
+  ];
+  const results = await notify('runFinished', subject, lines.join('\n')).catch(() => []);
+  results.filter(r => !r.ok).forEach(r => addLog('warn', 'ALERT FAILED', `${r.channel}: ${r.error}`));
+}
+
+async function runAutonomousLoop(opts = {}) {
+  try {
+    await runLoop(opts);
+  } finally {
+    await finishRun();
+  }
+}
+
+async function runLoop({ cap } = {}) {
   const browser = await ensureBrowser();
   if (!browser) {
     addLog('warn', 'CHROME NOT CONNECTED', `${lastCdpError} Open the CDP Connection tab for help.`);
@@ -488,7 +538,7 @@ async function runAutonomousLoop() {
       ? config.searchQueries
       : [config.searchQuery || 'Senior Frontend Engineer'];
     const targetRoles = [...new Set(rawRoles.map(r => r.trim()).filter(Boolean))];
-    const totalMax = config.maxApplications || 50;
+    const totalMax = cap || config.maxApplications || 50;
 
     // Only platforms that are actually open in Chrome
     const plan = [];
@@ -576,6 +626,7 @@ async function runAutonomousLoop() {
               job.appliedAt = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true }) + ' IST';
               job.applied_at = new Date().toISOString();
               job.stepsCompleted = job.stepsTotal;
+              currentRun?.sent.push({ company: job.company, title: job.title });
               broadcastEvent('jobs', jobs);
               emitProgress(key, role, where);
               await persistApplication(job, result);
@@ -583,6 +634,7 @@ async function runAutonomousLoop() {
               markNeedsReview(job, result);
               if (agentState === 'running') {
                 addLog('warn', 'ACTION REQUIRED', `[${label}] Please sign in to ${label} in Chrome. Agent paused — click Resume when done.`);
+                notify('needsYou', `Penguin needs you: sign in to ${label}`, `${label} signed you out, so the run is paused. Sign in to ${label} in Chrome, then click Resume in Agent Penguin.`).catch(() => {});
                 agentState = 'paused';
                 broadcastEvent('agentState', agentState);
               }
@@ -591,6 +643,7 @@ async function runAutonomousLoop() {
               // One check is usually one job; several in a row means the account is being checked
               if (++humanChecksInARow >= 3 && agentState === 'running') {
                 addLog('warn', 'ACTION REQUIRED', `[${label}] ${label} keeps asking for a human verification check. Complete it in Chrome, then click Resume.`);
+                notify('needsYou', `Penguin needs you: ${label} security check`, `${label} keeps asking for a human verification check, so the run is paused. Complete it in Chrome, then click Resume in Agent Penguin.`).catch(() => {});
                 agentState = 'paused';
                 broadcastEvent('agentState', agentState);
               }
@@ -717,6 +770,169 @@ async function runAutonomousLoop() {
     broadcastEvent('agentState', agentState);
   }
 }
+
+// ---------- Automation: schedule + alerts ----------
+const automationStatus = async () => ({
+  schedule: normalizeSchedule(config.schedule),
+  nextRun: nextRunLabel(config.schedule, loadState().lastScheduledRun),
+  lastScheduledRun: loadState().lastScheduledRun || null,
+  chromeReady: await bridgeReady().catch(() => false),
+  alerts: publicSettings(),
+});
+
+app.get('/api/automation', async (req, res) => res.json(await automationStatus()));
+
+app.post('/api/automation/schedule', async (req, res) => {
+  config.schedule = normalizeSchedule(req.body?.schedule);
+  persistState();
+  addLog('cdp', 'SCHEDULE', config.schedule.enabled
+    ? `Scheduled runs on: ${config.schedule.days.join(', ')} at ${config.schedule.time} (India time), ${config.schedule.applications} applications each.`
+    : 'Scheduled runs turned off.');
+  res.json(await automationStatus());
+});
+
+app.post('/api/alerts/settings', (req, res) => {
+  try { res.json(updateSettings(req.body || {})); } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/alerts/test', async (req, res) => {
+  try {
+    await sendTest(req.body?.channel);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/alerts/telegram/detect', async (req, res) => {
+  try { res.json({ success: true, ...(await detectTelegramChat()), alerts: publicSettings() }); } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// A scheduled run is due: start it the same way the Run Penguin button does
+async function runScheduled(schedule, date) {
+  saveState({ lastScheduledRun: date });
+  const skip = async (why) => {
+    addLog('warn', 'SCHEDULE SKIPPED', `Scheduled run didn't start: ${why}`);
+    await notify('scheduleSkipped', "Scheduled run didn't start", `${why}\n\nOpen Agent Penguin: http://localhost:5173/automation`).catch(() => {});
+  };
+  if (agentState === 'running' || agentState === 'paused') return skip('Penguin is already running.');
+  if (supabaseAdmin && currentUserId) {
+    const { data } = await supabaseAdmin.auth.admin.getUserById(currentUserId).catch(() => ({ data: null }));
+    if (data?.user && isBlocked(data.user)) return skip('This account has been blocked by an administrator.');
+  }
+  addLog('cdp', 'SCHEDULED RUN', `Starting the scheduled run (${schedule.applications} applications).`);
+  const browser = await ensureBrowser();
+  if (!browser) return skip(`Chrome isn't connected. Keep Chrome open with remote debugging on. (${lastCdpError || 'not connected'})`);
+  const ready = await prepareRun();
+  if (!ready.ok) return skip(ready.message);
+  beginRun({ cap: schedule.applications, source: 'schedule' });
+}
+
+// New walk-in drives for the user's roles and locations (checked every 3 hours)
+async function checkWalkIns() {
+  const alerts = publicSettings();
+  if (!alerts.events.walkIns || !anyChannelOn()) return;
+  const roles = Array.isArray(config.searchQueries) && config.searchQueries.length ? config.searchQueries : [config.searchQuery];
+  const state = loadState();
+  const firstCheck = !Array.isArray(state.walkInsSeen);
+  const seen = new Set(state.walkInsSeen || []);
+  const fresh = [];
+  for (const location of searchLocations(config).slice(0, 3)) {
+    const data = await getMarketInsights({ location, roles }).catch(() => null);
+    for (const w of data?.walkIns || []) {
+      if (!w.isTech || seen.has(w.id)) continue;
+      seen.add(w.id);
+      fresh.push({ ...w, city: data.city });
+    }
+  }
+  saveState({ walkInsSeen: [...seen].slice(-500) });
+  const daysAway = (d) => (d ? Math.round((new Date(`${d}T00:00:00+05:30`) - new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00+05:30')) / 86400000) : null);
+  const when = (d) => { const n = daysAway(d); return n == null ? 'date not given' : n === 0 ? 'today' : n === 1 ? 'tomorrow' : `on ${new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`; };
+  // The first check only reports drives in the next 3 days, so a new user isn't flooded
+  const list = (firstCheck ? fresh.filter(w => daysAway(w.date) == null || daysAway(w.date) <= 3) : fresh).slice(0, 6);
+  if (!list.length) return;
+  const subject = list.length === 1
+    ? `New ${list[0].company} walk-in ${when(list[0].date)} in ${list[0].city} for ${list[0].title}`
+    : `${list.length} new walk-ins for your roles`;
+  const text = list.map(w => `• ${w.company} — ${w.title}\n  ${when(w.date)}${w.time ? `, ${w.time}` : ''} · ${w.venue || w.city}\n  ${w.url}`).join('\n\n')
+    + '\n\nCheck the job post before you go.';
+  await notify('walkIns', subject, text).catch(() => {});
+  addLog('cdp', 'WALK-IN ALERT', `Sent an alert for ${list.length} new walk-in${list.length === 1 ? '' : 's'}.`);
+}
+
+// ---------- Mocks: AI interviews and tests ----------
+const mockRoute = (fn) => async (req, res) => {
+  try { res.json(await fn(req.body || {})); } catch (err) { res.status(500).json({ error: err.message }); }
+};
+app.post('/api/mock/interview/question', mockRoute((b) => nextInterviewQuestion({ ...b, profile: candidateProfile })));
+app.post('/api/mock/interview/evaluate', mockRoute((b) => evaluateAnswer(b)));
+app.post('/api/mock/interview/summary', mockRoute((b) => interviewSummary(b)));
+app.post('/api/mock/test', mockRoute((b) => generateTest(b)));
+
+// ---------- Needs review: finish with the user's answers ----------
+const findOrAddJob = (job) => {
+  let target = jobs.find(j => String(j.id) === String(job.id));
+  if (!target) { target = { ...job }; jobs.push(target); }
+  return target;
+};
+
+// Applies again to one job, using the answers the user just gave (saved in their profile)
+app.post('/api/review/retry', async (req, res) => {
+  if (agentState === 'running' || agentState === 'paused') {
+    return res.json({ success: false, message: 'Penguin is in the middle of a run. Try again when it finishes.' });
+  }
+  const job = req.body?.job;
+  if (!job?.id) return res.status(400).json({ success: false, message: 'Missing job.' });
+  if (req.body?.profile) { candidateProfile = { ...candidateProfile, ...req.body.profile }; persistState(); }
+  const browser = await ensureBrowser();
+  if (!browser) return res.json({ success: false, message: `Chrome isn't connected. ${lastCdpError || ''}`.trim() });
+  const key = job.platform || platformFromUrl(job.url) || 'linkedin';
+  const target = findOrAddJob({ ...job, platform: key });
+  target.status = 'shortlisted';
+  target.reviewReason = null;
+  broadcastEvent('jobs', jobs);
+  res.json({ success: true, started: true });
+
+  addLog('cdp', 'RETRY', `Applying again to ${target.company} with your answers...`);
+  let page;
+  try {
+    page = await browser.contexts()[0].newPage();
+    const result = await ADAPTERS[key].apply(page, target, candidateProfile, { pacingDelaySec: 2 },
+      (p) => addLog(p.type, p.tag, `[Retry] ${p.message}`));
+    if (result.success) {
+      target.status = 'applied';
+      target.applied_at = new Date().toISOString();
+      target.appliedAt = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true }) + ' IST';
+      broadcastEvent('jobs', jobs);
+      await persistApplication(target, result);
+    } else if (result.reason === 'already_applied') {
+      target.status = 'applied';
+      broadcastEvent('jobs', jobs);
+      await persistApplication(target, result);
+    } else {
+      markNeedsReview(target, result.reason === 'tab_closed' ? { reason: 'unconfirmed', detail: 'the tab was closed.' } : result);
+    }
+  } catch (err) {
+    markNeedsReview(target, { reason: 'unconfirmed', detail: `something went wrong (${err.message.split('\n')[0]}).` });
+  } finally {
+    if (page && key === 'linkedin') await withTimeout(discardEasyApply(page), 15000);
+    await page?.close().catch(() => {});
+  }
+});
+
+// The user applied by hand (company website etc.): count it as applied
+app.post('/api/review/mark-applied', async (req, res) => {
+  const job = req.body?.job;
+  if (!job?.id) return res.status(400).json({ success: false, message: 'Missing job.' });
+  const target = findOrAddJob({ ...job, platform: job.platform || platformFromUrl(job.url) || 'linkedin' });
+  target.status = 'applied';
+  target.reviewReason = null;
+  target.applied_at = new Date().toISOString();
+  broadcastEvent('jobs', jobs);
+  await persistApplication(target, { pacingDelaySec: 0 });
+  addLog('success', 'MARKED APPLIED', `${target.company} — "${target.title}" marked as applied by you.`);
+  res.json({ success: true });
+});
 
 // Job-market insights for the Applications tab (cached 30 min; ?refresh=1 to update)
 app.get('/api/market', async (req, res) => {
@@ -963,6 +1179,7 @@ app.post('/api/resume/analyze', async (req, res) => {
 app.post('/api/config', (req, res) => {
   if (req.body?.config) mergeConfig(req.body.config);
   if (req.body?.profile) candidateProfile = { ...candidateProfile, ...req.body.profile };
+  persistState();
   addLog('cdp', 'CONFIG UPDATED', 'Search parameters and candidate profile updated.');
   broadcastEvent('config', { config, candidateProfile });
   res.json({ success: true, config, candidateProfile });
@@ -1227,4 +1444,12 @@ app.listen(PORT, () => {
   console.log(`[JobAgent Backend] Telemetry SSE stream ready at http://localhost:${PORT}/api/stream`);
   // Chrome already allowed Penguin (the bridge outlives backend restarts): reconnect without asking again
   bridgeReady().then((ok) => ok && ensureBrowser()).catch(() => {});
+  // Scheduled runs and walk-in alerts
+  startScheduler({
+    getSchedule: () => config.schedule,
+    getLastRun: () => loadState().lastScheduledRun,
+    onDue: runScheduled,
+  });
+  setTimeout(() => checkWalkIns().catch(() => {}), 2 * 60 * 1000);
+  setInterval(() => checkWalkIns().catch(() => {}), 3 * 60 * 60 * 1000);
 });
