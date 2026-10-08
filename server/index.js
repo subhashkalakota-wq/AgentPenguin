@@ -567,11 +567,11 @@ async function runLoop({ cap } = {}) {
 
     // Applies to a shortlist using several tabs at once (config.parallelTabs, 1-15).
     // Each tab takes the next job from a shared queue; the quota is never exceeded.
-    const applyInParallel = async (key, role, shortlist, quota, where = '') => {
+    const applyInParallel = async (key, role, shortlist, quota, where = '', tabLimit = null) => {
       const adapter = ADAPTERS[key];
       const label = PLATFORMS[key].label;
       const queue = [...shortlist];
-      const tabs = Math.max(1, Math.min(15, Number(config.parallelTabs) || 10, queue.length));
+      const tabs = Math.max(1, Math.min(15, tabLimit || Number(config.parallelTabs) || 10, queue.length));
       let appliedForSlot = 0;
       let inFlight = 0;
       let stop = false;
@@ -684,11 +684,11 @@ async function runLoop({ cap } = {}) {
     const locations = searchLocations(config);
     if (!locations.length) locations.push('');
     const BATCH = 25;
-    let round = 0;
     const blockPlatform = (key) => targetRoles.forEach(r => locations.forEach(l => exhausted.add(`${key}|${r}|${l}`)));
 
-    // Sites take turns and share the target fairly (15 on 3 sites = 5 each). A site that runs
-    // out of matches, is blocked or closed hands its unused share to the others.
+    // All chosen sites apply at the same time, each in its own tabs, and share the target
+    // fairly (15 on 3 sites = 5 each). A site that runs out of matches, is blocked or closed
+    // hands its unused share to the others.
     const siteDone = (k) => targetRoles.every(r => locations.every(l => exhausted.has(`${k}|${r}|${l}`)));
     const allowance = (k) => {
       const active = plan.filter(p => !siteDone(p));
@@ -699,92 +699,115 @@ async function runLoop({ cap } = {}) {
     };
     if (plan.length > 1) {
       const each = Math.floor(totalMax / plan.length);
-      addLog('cdp', 'SPLIT', `Sharing ${totalMax} applications across ${plan.map((k, i) => `${PLATFORMS[k].label} (${each + (i < totalMax % plan.length ? 1 : 0)})`).join(', ')}. If a site runs out of matches, the others take its share.`);
+      addLog('cdp', 'SPLIT', `Applying on ${plan.map(k => PLATFORMS[k].label).join(', ')} at the same time: ${plan.map((k, i) => `${PLATFORMS[k].label} ${each + (i < totalMax % plan.length ? 1 : 0)}`).join(', ')} of ${totalMax}. If a site runs out of matches, the others take its share.`);
     }
 
-    runLoop:
-    while (totalApplied < totalMax && agentState !== 'idle' && agentState !== 'completed') {
-      let activeSlots = 0;
-      for (const role of targetRoles) {
-        for (const where of locations) {
-          for (const key of plan) {
-            const adapter = ADAPTERS[key];
-            const label = PLATFORMS[key].label;
+    // "Tabs at once" is shared by the sites still working (5 tabs on 3 sites = 2 + 2 + 1)
+    const tabsFor = (k) => {
+      const active = plan.filter(p => !siteDone(p));
+      const total = Math.max(active.length, Math.min(15, Number(config.parallelTabs) || 10));
+      const i = Math.max(0, active.indexOf(k));
+      return Math.max(1, Math.floor(total / active.length) + (i < total % active.length ? 1 : 0));
+    };
+    const running = () => agentState === 'running' || agentState === 'paused';
+    let stopAll = false;
+
+    // One site's search → filter → apply cycle for a role and city. Returns false when done.
+    const runSlot = async (key, role, where, round) => {
+      const adapter = ADAPTERS[key];
+      const label = PLATFORMS[key].label;
+      const slot = `${key}|${role}|${where}`;
+      const inPlace = where ? ` in ${placeName(where)}` : '';
+
+      const page = findPlatformPage(browser, key);
+      if (!page) {
+        addLog('warn', 'PLATFORM TAB CLOSED', `${label} tab was closed. Skipping it — reopen it to include it again.`);
+        blockPlatform(key);
+        return;
+      }
+      emitProgress(key, role, where);
+      addLog('scrape', 'SEARCH', `[${label}] Searching "${role}"${inPlace}${round ? ` (results page ${round + 1})` : ''} — ${totalApplied}/${totalMax} applied so far...`);
+
+      let scraped = [];
+      try {
+        scraped = await adapter.scrape(page, role, where, BATCH, round);
+      } catch (err) {
+        if (err.reason === 'login_required' || err.reason === 'verification_required') {
+          addLog('warn', 'ACTION REQUIRED', err.reason === 'login_required'
+            ? `[${label}] Please sign in to ${label} in Chrome. Skipping ${label} for now.`
+            : `[${label}] ${label} is showing a security check. Open its tab, make sure pages load normally. Skipping ${label} for now.`);
+          blockPlatform(key);
+          return;
+        }
+        addLog('warn', 'SEARCH FAILED', `[${label}] ${err.message}`);
+        exhausted.add(slot);
+        return;
+      }
+      const fresh = scraped.filter(j => !seenIds.has(String(j.id)));
+      fresh.forEach(j => seenIds.add(String(j.id)));
+      addLog('scrape', 'FOUND LISTINGS', `[${label}] ${fresh.length} new listings for "${role}"${inPlace}.`);
+      if (fresh.length === 0) {
+        exhausted.add(slot);
+        addLog('scrape', 'NO MORE LISTINGS', `[${label}] No more new listings for "${role}"${inPlace}.`);
+        return;
+      }
+
+      const evaluated = await filterJobsWithLLM(fresh, candidateProfile, config.minMatchScore, role);
+      evaluated.forEach(j => { j.targetRole = role; j.platform = key; j.searchLocation = where; });
+      for (const ej of evaluated) {
+        if (!jobs.find(j => String(j.id) === String(ej.id))) jobs.push(ej);
+      }
+      broadcastEvent('jobs', jobs);
+
+      let shortlist = evaluated.filter(j => j.status === 'shortlisted');
+      if (shortlist.length === 0) {
+        // Nothing cleared the bar: still try the closest matches rather than applying to nothing
+        shortlist = [...evaluated].sort((a, b) => (b.matchScore || 0) - (a.matchScore || 0)).slice(0, Math.ceil(evaluated.length / 2));
+        shortlist.forEach(j => { j.status = 'shortlisted'; });
+        addLog('llm', 'BEST MATCHES', `[${label}] No listing met the ${config.minMatchScore}% bar for "${role}"${inPlace}, so trying the ${shortlist.length} closest matches.`);
+      }
+      addLog('llm', 'SHORTLIST READY', `[${label}] ${shortlist.length} matches for "${role}"${inPlace}.`);
+
+      const quota = allowance(key);
+      if (quota <= 0) return;
+      const outcome = await applyInParallel(key, role, shortlist, quota, where, tabsFor(key));
+      if (outcome.stop) stopAll = true;
+    };
+
+    // Each site keeps going (deeper result pages each round) until the target is reached,
+    // the user stops, or the site has no new matches left
+    const siteRunner = async (key) => {
+      for (let round = 0; ; round++) {
+        let searched = 0;
+        for (const role of targetRoles) {
+          for (const where of locations) {
             while (agentState === 'paused') await sleep(1000);
-            if (agentState !== 'running' || totalApplied >= totalMax) break runLoop;
-            const slot = `${key}|${role}|${where}`;
-            if (exhausted.has(slot)) continue;
-            // This site already has its share for now; the others get their turn
-            if (allowance(key) <= 0) continue;
-            activeSlots++;
-            const inPlace = where ? ` in ${placeName(where)}` : '';
-
-            const page = findPlatformPage(browser, key);
-            if (!page) {
-              addLog('warn', 'PLATFORM TAB CLOSED', `${label} tab was closed. Skipping it — reopen it to include it again.`);
-              blockPlatform(key);
-              continue;
-            }
-            await page.bringToFront().catch(() => {});
-            emitProgress(key, role, where);
-            addLog('scrape', 'SEARCH', `[${label}] Searching "${role}"${inPlace}${round ? ` (results page ${round + 1})` : ''} — ${totalApplied}/${totalMax} applied so far...`);
-
-            let scraped = [];
-            try {
-              scraped = await adapter.scrape(page, role, where, BATCH, round);
-            } catch (err) {
-              if (err.reason === 'login_required' || err.reason === 'verification_required') {
-                addLog('warn', 'ACTION REQUIRED', err.reason === 'login_required'
-                  ? `[${label}] Please sign in to ${label} in Chrome. Skipping ${label} for now.`
-                  : `[${label}] ${label} is showing a security check. Open its tab, make sure pages load normally. Skipping ${label} for now.`);
-                blockPlatform(key);
-                continue;
-              }
-              addLog('warn', 'SEARCH FAILED', `[${label}] ${err.message}`);
-              exhausted.add(slot);
-              continue;
-            }
-            const fresh = scraped.filter(j => !seenIds.has(String(j.id)));
-            fresh.forEach(j => seenIds.add(String(j.id)));
-            addLog('scrape', 'FOUND LISTINGS', `[${label}] ${fresh.length} new listings for "${role}"${inPlace}.`);
-            if (fresh.length === 0) {
-              exhausted.add(slot);
-              addLog('scrape', 'NO MORE LISTINGS', `[${label}] No more new listings for "${role}"${inPlace}.`);
-              continue;
-            }
-
-            const evaluated = await filterJobsWithLLM(fresh, candidateProfile, config.minMatchScore, role);
-            evaluated.forEach(j => { j.targetRole = role; j.platform = key; j.searchLocation = where; });
-            for (const ej of evaluated) {
-              if (!jobs.find(j => String(j.id) === String(ej.id))) jobs.push(ej);
-            }
-            broadcastEvent('jobs', jobs);
-
-            let shortlist = evaluated.filter(j => j.status === 'shortlisted');
-            if (shortlist.length === 0) {
-              // Nothing cleared the bar: still try the closest matches rather than applying to nothing
-              shortlist = [...evaluated].sort((a, b) => (b.matchScore || 0) - (a.matchScore || 0)).slice(0, Math.ceil(evaluated.length / 2));
-              shortlist.forEach(j => { j.status = 'shortlisted'; });
-              addLog('llm', 'BEST MATCHES', `[${label}] No listing met the ${config.minMatchScore}% bar for "${role}"${inPlace}, so trying the ${shortlist.length} closest matches.`);
-            }
-            addLog('llm', 'SHORTLIST READY', `[${label}] ${shortlist.length} matches for "${role}"${inPlace}.`);
-
-            const outcome = await applyInParallel(key, role, shortlist, allowance(key), where);
-            if (outcome.stop) break runLoop;
+            if (stopAll || !running() || totalApplied >= totalMax) return;
+            if (exhausted.has(`${key}|${role}|${where}`)) continue;
+            if (allowance(key) <= 0) continue; // has its share for now
+            searched++;
+            await runSlot(key, role, where, round);
           }
         }
+        if (siteDone(key)) return;
+        if (!searched) {
+          // This site has its share; wait in case another site runs dry and hands over more
+          if (plan.every(p => p === key || siteDone(p)) || totalApplied >= totalMax) return;
+          await sleep(3000);
+          round--; // waiting isn't a new round of results
+        }
       }
-      if (activeSlots === 0) {
-        if (agentState === 'running') addLog('warn', 'OUT OF LISTINGS', `Penguin went through every listing it could find and applied to ${totalApplied} of ${totalMax}. Add more roles or locations in Run settings to find more.`);
-        break;
-      }
-      round++;
+    };
+
+    await Promise.all(plan.map(siteRunner));
+    if (agentState === 'running' && totalApplied < totalMax && !stopAll) {
+      addLog('warn', 'OUT OF LISTINGS', `Penguin went through every listing it could find and applied to ${totalApplied} of ${totalMax}. Add more roles or locations in Run settings to find more.`);
     }
 
     if (agentState === 'running') {
       agentState = 'completed';
       broadcastEvent('agentState', agentState);
-      addLog('success', 'SESSION COMPLETE', `Penguin finished! ${totalApplied} application${totalApplied === 1 ? '' : 's'} submitted across ${plan.map(k => PLATFORMS[k].label).join(', ')}.`);
+      addLog('success', 'SESSION COMPLETE', `Penguin finished! ${totalApplied} application${totalApplied === 1 ? '' : 's'} submitted: ${plan.map(k => `${PLATFORMS[k].label} ${appliedBy[k] || 0}`).join(', ')}.`);
     }
   } catch (err) {
     addLog('warn', 'EXECUTION HALTED', `Loop stopped: ${err.message}`);
