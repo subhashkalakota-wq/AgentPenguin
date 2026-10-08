@@ -107,6 +107,10 @@ export async function fetchUserAppliedJobsFromSupabase(user) {
         reviewKind: row.status === 'needs_review' ? traceOf(row.playwright_trace)?.reviewKind || '' : '',
         reviewQuestions: row.status === 'needs_review' ? traceOf(row.playwright_trace)?.questions || [] : [],
         platform: traceOf(row.playwright_trace)?.platform || undefined,
+        // Progress read from the user's email (inbox tracker) and follow-up status
+        pipelineStage: traceOf(row.playwright_trace)?.pipeline?.stage || null,
+        pipelineWhen: (traceOf(row.playwright_trace)?.pipeline?.events || []).slice(-1)[0]?.when || null,
+        followUpSentAt: traceOf(row.playwright_trace)?.pipeline?.followUp?.sentAt || null,
         id: row.job_id || row.id,
         title: row.title,
         company: row.company,

@@ -309,7 +309,7 @@ function optionIndex(options, answer) {
   return i;
 }
 
-async function fillStep(dialog, profile, onProgress, { forceAll = false } = {}) {
+async function fillStep(dialog, profile, onProgress, { forceAll = false, job = null } = {}) {
   let answered = 0;
   const unanswered = [];
   // Questions for the user if this job ends up in Needs review: ones Penguin couldn't
@@ -379,7 +379,7 @@ async function fillStep(dialog, profile, onProgress, { forceAll = false } = {}) 
     // options; the text around the choices gives them away, so they're always declined
     const selfId = /gender|\bsex\b|race\b|ethnic|hispanic|latin[oa]|veteran|disabilit|pronoun|sexual orientation/i.test(`${f.question} ${f.context || ''}`);
     const asked = selfId && !/gender|race|ethnic|veteran|disabilit|hispanic|latin/i.test(f.question) ? `Self-identification (gender / race / veteran / disability): ${f.question}` : f.question;
-    const result = await answerQuestion({ question: asked || 'Select one option', type: askType, options: f.options || [] }, profile, { force: f.required || forceAll });
+    const result = await answerQuestion({ question: asked || 'Select one option', type: askType, options: f.options || [] }, profile, { force: f.required || forceAll, job });
     if (!result) {
       if (f.required) { unanswered.push(f.question || 'Unlabelled question'); ask(f); }
       continue;
@@ -435,7 +435,7 @@ async function fillStep(dialog, profile, onProgress, { forceAll = false } = {}) 
       }
     }
     answered++;
-    const tags = { ai: 'AI ANSWER', profile: 'PROFILE ANSWER', rules: 'AUTO ANSWER', 'auto-pick': 'AUTO PICK', learned: 'YOUR ANSWER' };
+    const tags = { ai: 'AI ANSWER', profile: 'PROFILE ANSWER', rules: 'AUTO ANSWER', 'auto-pick': 'AUTO PICK', learned: 'YOUR ANSWER', tailored: 'WRITTEN FOR JOB' };
     onProgress({
       type: source === 'auto-pick' ? 'warn' : 'llm',
       tag: tags[source] || 'AUTO ANSWER',
@@ -482,6 +482,25 @@ async function visibleErrors(dialog) {
   }).catch(() => []);
 }
 
+// Job description from LinkedIn's public job page (same text the signed-out page shows)
+export async function linkedInDescription(id) {
+  if (!id) return '';
+  try {
+    const res = await fetch(`https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/${id}`, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36' },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return '';
+    const html = await res.text();
+    const block = html.match(/show-more-less-html__markup[^>]*>([\s\S]*?)<\/div>/)?.[1] || '';
+    return block.replace(/<br\s*\/?>|<\/(p|li|ul|h\d)>/gi, '\n').replace(/<[^>]+>/g, ' ')
+      .replace(/&amp;/g, '&').replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"').replace(/&nbsp;/g, ' ')
+      .replace(/[ \t]+/g, ' ').replace(/\n\s*/g, '\n').trim().slice(0, 6000);
+  } catch {
+    return '';
+  }
+}
+
 // A human check (captcha / security verification) on the page or inside the form
 async function humanCheck(page, dialog = null) {
   if (/\/checkpoint\/(challenge|lg)/.test(page.url())) return true;
@@ -511,7 +530,7 @@ export async function applyToJobWithPlaywright(page, job, profile, options = {},
   const questions = new Map();
   const collect = (list = []) => list.forEach(q => { if (!questions.has(q.question)) questions.set(q.question, q); });
   const fill = async (dialog, opts) => {
-    const out = await fillStep(dialog, profile, onProgress, opts);
+    const out = await fillStep(dialog, profile, onProgress, { ...opts, job });
     collect(out.needsInput);
     return out;
   };
@@ -530,6 +549,8 @@ export async function applyToJobWithPlaywright(page, job, profile, options = {},
     await randomSleep(2500, 3500);
     if (page.isClosed()) return { success: false, reason: 'tab_closed' };
     if (/\/(login|authwall|signup|uas\/login)/.test(page.url())) return { success: false, reason: 'login_required', detail: 'Signed out of LinkedIn.' };
+    // The job description, so open questions can be answered for this job
+    if (!job.description) job.description = await linkedInDescription(job.id);
     if (await humanCheck(page)) return review('verification_required', 'LinkedIn is asking for a human verification check.', 'HUMAN CHECK');
 
     // Easy Apply button can take a moment on a busy page
@@ -652,5 +673,6 @@ export async function applyToJobWithPlaywright(page, job, profile, options = {},
   }
 }
 
-// For local form tests only
+// Shared with the Naukri / Indeed appliers, and local form tests
+export { readFields, fillStep, clickChoice, findAction, waitForAction, humanCheck };
 export const __test = { readFields, fillStep, clickChoice };

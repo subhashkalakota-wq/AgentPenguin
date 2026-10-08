@@ -13,6 +13,9 @@ import { searchLocations, placeName } from '../shared/locations.js';
 import { loadState, saveState } from './state.js';
 import { notify, publicSettings, updateSettings, sendTest, detectTelegramChat, anyChannelOn } from './notifier.js';
 import { startScheduler, normalizeSchedule, nextRunLabel } from './scheduler.js';
+import { applyNaukriJob, applyIndeedJob } from './boardAppliers.js';
+import { createInbox, inboxSettings, updateInboxSettings } from './inbox.js';
+import { emailAccount } from './notifier.js';
 import { nextInterviewQuestion, evaluateAnswer, interviewSummary, generateTest } from './mocks.js';
 import { filterJobsWithLLM } from './llmFilter.js';
 import { applyToJobWithPlaywright, discardEasyApply } from './playwrightApplier.js';
@@ -24,9 +27,7 @@ import {
   openPlatformTab,
   platformFromUrl,
   scrapeNaukriJobs,
-  applyNaukriJob,
   scrapeIndeedJobs,
-  applyIndeedJob,
   randomSleep
 } from './platforms.js';
 import { registerAdminRoutes, verifyRequestUser, isBlocked } from './admin.js';
@@ -311,10 +312,12 @@ async function persistApplication(job, result) {
       url: job.url || '',
       logo: '',
       easy_apply: job.status === 'needs_review' ? result?.reason !== 'external_apply' : true,
-      // Why it needs a person (shown in the Needs review tab)
-      playwright_trace: job.status === 'needs_review'
-        ? JSON.stringify({ reviewReason: job.reviewReason, reviewDetail: job.reviewDetail || '', reviewKind: job.reviewKind || '', questions: job.reviewQuestions || [], platform: job.platform || '' })
-        : null,
+      description: job.description ? String(job.description).slice(0, 1000) : null,
+      // Why it needs a person (shown in the Needs review tab). Other rows keep what is stored
+      // there (e.g. the inbox tracker's progress for the application).
+      ...(job.status === 'needs_review'
+        ? { playwright_trace: JSON.stringify({ reviewReason: job.reviewReason, reviewDetail: job.reviewDetail || '', reviewKind: job.reviewKind || '', questions: job.reviewQuestions || [], platform: job.platform || '' }) }
+        : {}),
     }, { onConflict: 'user_id,job_id' });
     addLog('cdp', 'SUPABASE SYNC', job.status === 'needs_review'
       ? `Saved ${job.company} to Needs review (${job.reviewReason}).`
@@ -859,6 +862,40 @@ async function checkWalkIns() {
   await notify('walkIns', subject, text).catch(() => {});
   addLog('cdp', 'WALK-IN ALERT', `Sent an alert for ${list.length} new walk-in${list.length === 1 ? '' : 's'}.`);
 }
+
+// ---------- Inbox tracker and follow-ups ----------
+const inbox = createInbox({
+  supabaseAdmin,
+  getUserId: () => currentUserId,
+  getProfile: () => candidateProfile,
+  log: (type, tag, message) => addLog(type, tag, message),
+  onApplicationsChanged: () => broadcastEvent('applicationsChanged', { at: Date.now() }),
+});
+// Verifies the signed-in user (so we read and update their applications), then runs fn
+const inboxRoute = (fn) => async (req, res) => {
+  if (await rejectIfBlocked(req, res)) return;
+  try { res.json(await fn(req.body || {}, req)); } catch (err) { res.status(400).json({ error: err.message }); }
+};
+
+app.get('/api/inbox', inboxRoute(async () => {
+  const account = emailAccount();
+  let followUps = [];
+  let followUpError = null;
+  try { followUps = await inbox.followUpsDue(); } catch (err) { followUpError = err.message; }
+  return {
+    settings: inboxSettings(),
+    account: account ? { user: account.user, imapHost: account.imapHost } : null,
+    signedIn: Boolean(currentUserId && supabaseAdmin),
+    events: inbox.events().slice(0, 60),
+    followUps,
+    followUpError,
+  };
+}));
+app.post('/api/inbox/settings', inboxRoute((b) => updateInboxSettings(b)));
+app.post('/api/inbox/check', inboxRoute(() => inbox.check({ reason: 'manual' })));
+app.post('/api/followup/draft', inboxRoute((b) => inbox.draftFollowUp(b.jobId)));
+app.post('/api/followup/send', inboxRoute((b) => inbox.sendFollowUp(b)));
+app.post('/api/followup/skip', inboxRoute((b) => inbox.skipFollowUp(b.jobId)));
 
 // ---------- Mocks: AI interviews and tests ----------
 const mockRoute = (fn) => async (req, res) => {
@@ -1451,5 +1488,9 @@ app.listen(PORT, () => {
     onDue: runScheduled,
   });
   setTimeout(() => checkWalkIns().catch(() => {}), 2 * 60 * 1000);
+  // Inbox tracker: every 30 minutes while it's on
+  setInterval(() => {
+    if (inboxSettings().enabled && emailAccount()) inbox.check({ reason: 'scheduled' }).catch(err => addLog('warn', 'INBOX', `Couldn't check email: ${err.message}`));
+  }, 30 * 60 * 1000);
   setInterval(() => checkWalkIns().catch(() => {}), 3 * 60 * 60 * 1000);
 });

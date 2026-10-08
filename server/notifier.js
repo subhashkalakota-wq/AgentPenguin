@@ -16,6 +16,7 @@ const FILE = path.resolve('server/data/notify.json');
 
 export const EVENTS = {
   runFinished: 'A run finishes',
+  inbox: 'An interview, test or offer arrives in your email',
   needsYou: 'Penguin needs you (sign in, security check)',
   scheduleSkipped: "A scheduled run couldn't start",
   walkIns: 'New walk-in drives for your roles and cities',
@@ -25,7 +26,7 @@ const DEFAULTS = {
   telegram: { enabled: false, token: '', chatId: '' },
   whatsapp: { enabled: false, phone: '', apiKey: '' },
   email: { enabled: false, host: 'smtp.gmail.com', port: 465, user: '', pass: '', to: '' },
-  events: { runFinished: true, needsYou: true, scheduleSkipped: true, walkIns: true },
+  events: { runFinished: true, inbox: true, needsYou: true, scheduleSkipped: true, walkIns: true },
 };
 
 const SECRETS = { telegram: ['token'], whatsapp: ['apiKey'], email: ['pass'] };
@@ -87,6 +88,22 @@ export function updateSettings(patch = {}) {
 export function anyChannelOn() {
   const s = read();
   return ['telegram', 'whatsapp', 'email'].some(ch => s[ch].enabled && ready[ch](s[ch]));
+}
+
+/** The saved email account (for the inbox tracker and follow-ups), or null when not set up. */
+export function emailAccount() {
+  const c = read().email;
+  if (!ready.email(c)) return null;
+  const host = /gmail/i.test(c.host) ? 'imap.gmail.com' : /office365|outlook/i.test(c.host) ? 'outlook.office365.com' : c.host.replace(/^smtp\./i, 'imap.');
+  return { user: c.user, pass: c.pass, smtpHost: c.host, smtpPort: Number(c.port) || 465, imapHost: host, imapPort: 993, to: c.to };
+}
+
+/** Sends an email from the user's own account (follow-ups). Replies stay in the thread. */
+export async function sendFromUser({ to, subject, text, inReplyTo, references }) {
+  const c = read().email;
+  if (!ready.email(c)) throw new Error('Set up Email in Automation → Alerts first (your Gmail and an app password).');
+  const transport = nodemailer.createTransport({ host: c.host, port: Number(c.port) || 465, secure: Number(c.port) === 465, auth: { user: c.user, pass: c.pass } });
+  return transport.sendMail({ from: c.user, to, subject, text, ...(inReplyTo ? { inReplyTo, references: references || inReplyTo } : {}) });
 }
 
 // ---- Senders ----

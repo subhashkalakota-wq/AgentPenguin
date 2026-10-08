@@ -60,9 +60,9 @@ const speak = (text) => {
 };
 
 // ---------------- Penguin interview ----------------
-function PenguinInterview({ roles }) {
-  const [setup, setSetup] = useState({ role: roles[0] || 'Software Engineer', kind: 'technical', level: 'fresher', count: 5 });
-  const [customRole, setCustomRole] = useState('');
+function PenguinInterview({ roles, prefill }) {
+  const [setup, setSetup] = useState({ role: prefill?.role ? '__custom' : (roles[0] || 'Software Engineer'), kind: 'technical', level: 'fresher', count: 5 });
+  const [customRole, setCustomRole] = useState(prefill?.role ? `${prefill.role}${prefill.company ? ` at ${prefill.company}` : ''}` : '');
   const [stage, setStage] = useState('setup'); // setup | asking | evaluated | summary
   const [rounds, setRounds] = useState([]); // { question, topic, hint, answer, eval }
   const [answer, setAnswer] = useState('');
@@ -235,9 +235,9 @@ function PenguinInterview({ roles }) {
 }
 
 // ---------------- Penguin test ----------------
-function PenguinTest({ roles }) {
-  const [topic, setTopic] = useState('Quantitative aptitude');
-  const [custom, setCustom] = useState('');
+function PenguinTest({ roles, prefill }) {
+  const [topic, setTopic] = useState(prefill?.role ? '__custom' : 'Quantitative aptitude');
+  const [custom, setCustom] = useState(prefill?.role ? `${prefill.role} (assessment${prefill.company ? ` for ${prefill.company}` : ''})` : '');
   const [level, setLevel] = useState('medium');
   const [count, setCount] = useState(10);
   const [test, setTest] = useState(null);
@@ -418,7 +418,18 @@ const MODES = [
 
 /** Mocks: AI interviews and tests by Penguin, plus real mock interviews and tests online. */
 export default function MocksTab({ roles = [] }) {
-  const [mode, setMode] = useState(() => { try { return localStorage.getItem('pg_mocks_mode') || 'interview'; } catch { return 'interview'; } });
+  // "Practise for this interview/test" from the Inbox tab sets up the matching mock
+  const [prefill] = useState(() => {
+    try {
+      const p = JSON.parse(localStorage.getItem('pg_mock_prefill') || 'null');
+      localStorage.removeItem('pg_mock_prefill');
+      return p;
+    } catch { return null; }
+  });
+  const [mode, setMode] = useState(() => {
+    if (prefill) return prefill.kind === 'assessment' ? 'test' : 'interview';
+    try { return localStorage.getItem('pg_mocks_mode') || 'interview'; } catch { return 'interview'; }
+  });
   const pick = (m) => { setMode(m); try { localStorage.setItem('pg_mocks_mode', m); } catch { /* storage unavailable */ } };
   const roleList = roles.length ? roles : ['Software Engineer'];
   return (
@@ -430,8 +441,9 @@ export default function MocksTab({ roles = [] }) {
           </button>
         ))}
       </div>
-      {mode === 'interview' && <PenguinInterview roles={roleList} />}
-      {mode === 'test' && <PenguinTest roles={roleList} />}
+      {prefill && <p className="pg-mock-prefill">Set up for your {prefill.kind === 'assessment' ? 'assessment' : 'interview'}{prefill.company ? ` with ${prefill.company}` : ''}{prefill.role ? ` — ${prefill.role}` : ''}. Good luck!</p>}
+      {mode === 'interview' && <PenguinInterview roles={roleList} prefill={prefill} />}
+      {mode === 'test' && <PenguinTest roles={roleList} prefill={prefill} />}
       {mode === 'real' && <RealMocks />}
     </div>
   );

@@ -510,6 +510,15 @@ export default function JobsTable({
                       {job.status === 'needs_review' && job.reviewReason && (
                         <span className="pg-review-reason" title={job.reviewDetail || job.reviewReason}>{job.reviewReason}</span>
                       )}
+                      {job.status === 'applied' && job.pipelineStage && (
+                        <span className={`pg-stage pg-stage-sm is-${job.pipelineStage}`} title="From your email">
+                          {{ interview: 'Interview', assessment: 'Assessment', offer: 'Offer', rejected: 'Not selected', viewed: 'Viewed', confirmation: 'Received' }[job.pipelineStage] || job.pipelineStage}
+                          {job.pipelineWhen && ` · ${new Date(job.pipelineWhen).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`}
+                        </span>
+                      )}
+                      {job.status === 'applied' && job.followUpSentAt && !['interview', 'offer', 'rejected'].includes(job.pipelineStage) && (
+                        <span className="pg-review-reason">Followed up {new Date(job.followUpSentAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</span>
+                      )}
                       {job.status === 'needs_review' && onFinishReview && (
                         <button
                           type="button"

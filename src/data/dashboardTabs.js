@@ -1,10 +1,11 @@
-import { LayoutDashboard, MonitorPlay, Briefcase, ScrollText, User, PlugZap, GraduationCap, CalendarClock } from 'lucide-react';
+import { LayoutDashboard, MonitorPlay, Briefcase, ScrollText, User, PlugZap, GraduationCap, CalendarClock, Mail } from 'lucide-react';
 
 // Sidebar order: tables first, overview last
 export const DASHBOARD_TABS = [
   { key: 'applications', label: 'Applications', icon: Briefcase,       path: '/applications' },
   { key: 'live',         label: 'Live Agent',   icon: MonitorPlay,     path: '/agent' },
   { key: 'activity',     label: 'Activity Log', icon: ScrollText,      path: '/activity' },
+  { key: 'inbox',        label: 'Inbox',        icon: Mail,            path: '/inbox' },
   { key: 'mocks',        label: 'Mocks',        icon: GraduationCap,   path: '/mocks' },
   { key: 'automation',   label: 'Automation',   icon: CalendarClock,   path: '/automation' },
   { key: 'cdp',          label: 'CDP Connection', icon: PlugZap,       path: '/cdp' },

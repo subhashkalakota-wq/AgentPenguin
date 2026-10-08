@@ -8,6 +8,7 @@ import PlatformsBanner from './components/PlatformsBanner';
 import MarketInsights from './components/MarketInsights';
 import MocksTab from './components/MocksTab';
 import AutomationTab from './components/AutomationTab';
+import InboxTab from './components/InboxTab';
 import ReviewFinishModal from './components/ReviewFinishModal';
 import { searchLocations } from '../shared/locations';
 import PenguinWelcome from './components/PenguinWelcome';
@@ -75,6 +76,7 @@ export default function App() {
       case '/profile':         return { view: 'dashboard', tab: 'profile' };
       case '/cdp':             return { view: 'dashboard', tab: 'cdp' };
       case '/mocks':           return { view: 'dashboard', tab: 'mocks' };
+      case '/inbox':           return { view: 'dashboard', tab: 'inbox' };
       case '/automation':      return { view: 'dashboard', tab: 'automation' };
       case '/viso-dsa':        return { view: 'viso-dsa' };
       case '/resume-analyzer': return { view: 'resume-analyzer' };
@@ -260,6 +262,14 @@ export default function App() {
     }
   }, []);
 
+  // Latest user and loader for the live stream (its handler is created once)
+  const currentUserRef = useRef(null);
+  const loadJobsRef = useRef(loadJobsFromSupabase);
+  useEffect(() => {
+    currentUserRef.current = currentUser;
+    loadJobsRef.current = loadJobsFromSupabase;
+  }, [currentUser, loadJobsFromSupabase]);
+
   useEffect(() => {
     if (!currentUser) return;
 
@@ -438,6 +448,9 @@ export default function App() {
               const filtered = prev.filter(j => !newIds.has(j.id));
               return [...payload, ...filtered];
             });
+          } else if (type === 'applicationsChanged') {
+            // Inbox tracker / follow-ups updated applications in the database
+            if (currentUserRef.current) loadJobsRef.current(currentUserRef.current);
           } else if (type === 'runProgress') {
             setRunProgress(payload);
           } else if (type === 'activeJob') {
@@ -698,7 +711,7 @@ export default function App() {
   const sharedOverlays = (
     <>
       <AgentControlPanel
-        key={isConfigOpen ? 'open' : 'closed'}
+        key={isConfigOpen ? 'config-open' : 'config-closed'}
         isOpen={isConfigOpen}
         onClose={() => closeOverlay(['/config', '/settings'], setIsConfigOpen)}
         config={config}
@@ -895,6 +908,16 @@ export default function App() {
         return <MocksTab roles={Array.isArray(config.searchQueries) && config.searchQueries.length ? config.searchQueries : [config.searchQuery].filter(Boolean)} />;
       case 'automation':
         return <AutomationTab />;
+      case 'inbox':
+        return (
+          <InboxTab
+            onOpenAutomation={() => navigateTo('/automation')}
+            onPractise={(prefill) => {
+              try { localStorage.setItem('pg_mock_prefill', JSON.stringify(prefill)); } catch { /* storage unavailable */ }
+              navigateTo('/mocks');
+            }}
+          />
+        );
       case 'cdp':
         return (
           <CdpTab

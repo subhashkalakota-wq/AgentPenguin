@@ -261,7 +261,10 @@ function ruleAnswer({ question, type, options = [] }, profile) {
   if (/notice period/.test(q)) return type === 'number' ? noticeDays(profile) : (isChoice ? null : (profile.noticePeriod || null));
   if (/(expected|desired|current).*(salary|ctc|compensation)|salary expectation|(ctc|salary) (in|per)/.test(q)) {
     const n = salaryNumber(profile);
-    return type === 'number' ? n : (isChoice ? null : (n || profile.salaryFloor || null));
+    // "…in LPA / lakhs": answer in lakhs (6), not rupees (600000)
+    const inLakhs = /\blpa\b|lakh|lac\b/.test(q);
+    const value = n && inLakhs ? String(Number((Number(n) / 100000).toFixed(1))) : n;
+    return type === 'number' ? value : (isChoice ? null : (value || profile.salaryFloor || null));
   }
 
   if (/relocat/.test(q)) return /remote only|no/i.test(profile.relocation || '') ? no() : yes();
@@ -379,7 +382,51 @@ function forcedAnswer({ question, type, options = [] }, profile) {
  * @param opts    { force } — fill required fields even without a confident answer
  * @returns { answer, source: 'learned' | 'profile' | 'rules' | 'ai' | 'auto-pick' } | null
  */
-export async function answerQuestion(field, profile, { force = false } = {}) {
+// ---- Answers written for each job ----
+// Open questions ("Why this company?", cover note, "describe your experience with…")
+const OPEN_ENDED = /\bwhy\b|describe|tell (us|me)|cover (letter|note)|about (yourself|you)|motivat|interest(ed)? in|what makes|summar|explain|achievement|project|strength|excite|fit for|good fit|contribute|anything else|additional information/i;
+const NOT_OPEN = /\bname\b|e-?mail|phone|mobile|city|location|url|link|website|linkedin|github|portfolio|salary|ctc|notice|how many|years|date|pin ?code|zip|gender|race|veteran|disabilit|authori[sz]|sponsor|visa/i;
+export const isOpenEnded = (f) => (f.type === 'textarea' || f.type === 'text')
+  && !(f.options || []).length && OPEN_ENDED.test(f.question || '') && !NOT_OPEN.test(f.question || '');
+
+/**
+ * Writes an answer for this specific job from its description, the resume and the user's
+ * own saved/learned answer (used as the base). Never adds facts that aren't in those.
+ */
+async function tailoredAnswer(field, profile, job, base) {
+  if (!hasLLM() || !job?.description) return null;
+  const ra = profile.resumeAnalysis || {};
+  const out = await llmJson(
+    'You write one answer for a job application form, for this specific job. Ground every claim in the RESUME facts or the candidate\'s own BASE ANSWER; '
+      + 'never invent employers, years, metrics, certifications or skills. Connect 1–2 of the candidate\'s real skills or projects to what this job description asks for, '
+      + 'and mention the company by name when the question is about the company. First person, warm and specific, no clichés, no bullet points. '
+      + `${field.type === 'textarea' ? 'Length: 70–130 words.' : 'Length: one or two sentences, under 220 characters.'} `
+      + 'Reply with JSON {"answer": string}.',
+    JSON.stringify({
+      question: field.question,
+      job: { title: job.title, company: job.company, description: String(job.description).slice(0, 2500) },
+      resume: { summary: ra.summary, currentTitle: ra.currentTitle, experienceYears: ra.totalExperienceYears, skills: (ra.skills || []).map(s => s.name).slice(0, 25), education: ra.education, excerpt: (ra.resumeExcerpt || '').slice(0, 1500) },
+      baseAnswer: base || null,
+      name: profile.name,
+    }),
+  ).catch(() => null);
+  const answer = String(out?.answer || '').trim();
+  if (!answer) return null;
+  return field.type === 'textarea' ? answer.slice(0, 1500) : answer.slice(0, 300);
+}
+
+/**
+ * @param opts.job { title, company, description } — the job being applied to; open questions
+ *        get an answer written for it
+ */
+export async function answerQuestion(field, profile, { force = false, job = null } = {}) {
+  // Open questions: write the answer for this job (the user's saved/learned answer is the base)
+  if (job?.description && isOpenEnded(field)) {
+    const base = learnedAnswerFor(field, profile.learnedAnswers) ?? savedAnswerFor(field.question, profile.screeningAnswers)?.value ?? null;
+    const written = await tailoredAnswer(field, profile, job, base);
+    if (written) return { answer: written, source: 'tailored' };
+  }
+
   // 0. The user's own answer from an earlier Needs-review job always wins
   const taught = learnedAnswerFor(field, profile.learnedAnswers);
   if (taught != null) return { answer: taught, source: 'learned' };
