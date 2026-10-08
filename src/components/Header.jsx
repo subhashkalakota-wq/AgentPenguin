@@ -20,7 +20,8 @@ import {
   X,
   Code2,
   FileCheck2,
-  Sparkles
+  Sparkles,
+  Pencil
 } from 'lucide-react';
 import PenguinAvatar from './PenguinAvatar';
 import AgentPenguinMark from './AgentPenguinMark';
@@ -101,10 +102,14 @@ export default function Header({
         <span className="pg-title-divider" aria-hidden="true" />
         <h1 className="pg-page-title">{pageTitle}</h1>
 
-        {/* Run summary: how many jobs this run is applying to, and for which roles */}
-        <div
+        {/* Run summary: how many jobs this run is applying to, and for which roles.
+            Tapping it opens Run settings to change them. */}
+        <button
+          type="button"
           className={`pg-run-summary ${isRunning ? 'is-live' : ''}`}
-          title={`${isActive ? `${runApplied} of ${maxCap} applied` : `Target: ${maxCap} applications`} — Roles: ${roleList.join(', ') || 'none set'}`}
+          onClick={onOpenSettings}
+          title={`${isActive ? `${runApplied} of ${maxCap} applied` : `Target: ${maxCap} applications`} — Roles: ${roleList.join(', ') || 'none set'}. Click to change.`}
+          aria-label={`${isActive ? `${runApplied} of ${maxCap} applications sent` : `Target ${maxCap} applications`}, roles: ${roleList.join(', ') || 'none set'}. Edit run settings`}
         >
           <span className="pg-run-summary-count">
             {isRunning && <span className="pg-run-summary-dot" aria-hidden="true" />}
@@ -115,7 +120,7 @@ export default function Header({
             </span>
           </span>
           <span className="pg-run-summary-roles">
-            {roleList.length === 0 && <button type="button" className="pg-run-summary-set" onClick={onOpenSettings}>Set roles</button>}
+            {roleList.length === 0 && <span className="pg-run-summary-set">Set roles</span>}
             {roleList.map((r, i) => (
               <React.Fragment key={r}>
                 {i > 0 && <span className="pg-run-summary-sep" aria-hidden="true">·</span>}
@@ -123,7 +128,8 @@ export default function Header({
               </React.Fragment>
             ))}
           </span>
-        </div>
+          <span className="pg-run-summary-edit" aria-hidden="true"><Pencil size={13} /> Edit</span>
+        </button>
 
         <button
           type="button"
