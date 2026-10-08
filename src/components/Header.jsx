@@ -21,7 +21,8 @@ import {
   Code2,
   FileCheck2,
   Sparkles,
-  Pencil
+  Pencil,
+  MapPin
 } from 'lucide-react';
 import PenguinAvatar from './PenguinAvatar';
 import AgentPenguinMark from './AgentPenguinMark';
@@ -61,6 +62,7 @@ export default function Header({
   onOpenCdp,
   onResume,
   roles = [],
+  locations = [],
   runProgress = null
 }) {
   const [isSidePanelOpen, setIsSidePanelOpen] = useState(false);
@@ -77,6 +79,8 @@ export default function Header({
   const capPct = maxCap > 0 ? Math.min(100, (runApplied / maxCap) * 100) : 0;
   const roleList = roles.filter(Boolean);
   const currentRole = isActive ? runProgress?.role : null;
+  const currentPlace = isActive ? runProgress?.location : null;
+  const placeName = (l = '') => l.split(/[,(/|]/)[0].trim() || l;
 
   return (
     <header className="pg-header">
@@ -108,8 +112,8 @@ export default function Header({
           type="button"
           className={`pg-run-summary ${isRunning ? 'is-live' : ''}`}
           onClick={onOpenSettings}
-          title={`${isActive ? `${runApplied} of ${maxCap} applied` : `Target: ${maxCap} applications`} — Roles: ${roleList.join(', ') || 'none set'}. Click to change.`}
-          aria-label={`${isActive ? `${runApplied} of ${maxCap} applications sent` : `Target ${maxCap} applications`}, roles: ${roleList.join(', ') || 'none set'}. Edit run settings`}
+          title={`${isActive ? `${runApplied} of ${maxCap} applied` : `Target: ${maxCap} applications`} — Roles: ${roleList.join(', ') || 'none set'} — Locations: ${locations.join(', ') || 'none set'}. Click to change.`}
+          aria-label={`${isActive ? `${runApplied} of ${maxCap} applications sent` : `Target ${maxCap} applications`}, roles: ${roleList.join(', ') || 'none set'}, locations: ${locations.join(', ') || 'none set'}. Edit run settings`}
         >
           <span className="pg-run-summary-count">
             {isRunning && <span className="pg-run-summary-dot" aria-hidden="true" />}
@@ -118,6 +122,16 @@ export default function Header({
                 ? <>{isPaused ? 'Paused · ' : 'Applying · '}<strong>{runApplied}</strong> of {maxCap} sent</>
                 : <>Target <strong>{maxCap}</strong> applications</>}
             </span>
+          </span>
+          <span className="pg-run-summary-places">
+            <MapPin size={12} />
+            {locations.length === 0 && <span className="pg-run-summary-set">Set locations</span>}
+            {locations.map((l, i) => (
+              <React.Fragment key={l}>
+                {i > 0 && ', '}
+                <span className={l === currentPlace ? 'is-current' : ''}>{placeName(l)}</span>
+              </React.Fragment>
+            ))}
           </span>
           <span className="pg-run-summary-roles">
             {roleList.length === 0 && <span className="pg-run-summary-set">Set roles</span>}

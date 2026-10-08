@@ -4,8 +4,11 @@ import {
   CalendarDays, Clock, ExternalLink, AlertTriangle, Pencil,
 } from 'lucide-react';
 
+import { placeName } from '../../shared/locations';
+
 const API = 'http://localhost:3001/api/market';
 const COLLAPSE_KEY = 'pg_market_collapsed';
+const PLACE_KEY = 'pg_market_location';
 
 function ago(iso) {
   const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
@@ -46,7 +49,7 @@ function NewsList({ items, emptyText }) {
  * Job market at a glance, above the applications table: market pulse, new openings
  * for the user's roles, who's hiring, walk-in drives nearby, and job / tech news.
  */
-export default function MarketInsights({ location = '', roles = [], onEditSettings }) {
+export default function MarketInsights({ locations = [], roles = [], onEditSettings }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -55,6 +58,16 @@ export default function MarketInsights({ location = '', roles = [], onEditSettin
     try { return localStorage.getItem(COLLAPSE_KEY) === '1'; } catch { return false; }
   });
   const roleKey = roles.filter(Boolean).join('|');
+  // Market data is for one of the user's search locations at a time (remembered per browser)
+  const [picked, setPicked] = useState(() => {
+    try { return localStorage.getItem(PLACE_KEY) || ''; } catch { return ''; }
+  });
+  const location = locations.includes(picked) ? picked : (locations[0] || '');
+  const pickPlace = (l) => {
+    setPicked(l);
+    setData(null);
+    try { localStorage.setItem(PLACE_KEY, l); } catch { /* storage unavailable */ }
+  };
 
   const load = useCallback(async (refresh = false) => {
     setLoading(true);
@@ -81,7 +94,7 @@ export default function MarketInsights({ location = '', roles = [], onEditSettin
     });
   };
 
-  const city = data?.city || location.split(/[,(/]/)[0].trim() || 'India';
+  const city = data?.city || placeName(location) || 'India';
 
   return (
     <section className="pg-market" aria-label="Job market">
@@ -89,8 +102,7 @@ export default function MarketInsights({ location = '', roles = [], onEditSettin
         <div>
           <h2>Job market today</h2>
           <p>
-            <MapPin size={13} /> {city}
-            <span className="pg-market-dot">·</span>
+            {locations.length <= 1 && <><MapPin size={13} /> {city}<span className="pg-market-dot">·</span></>}
             {roles.filter(Boolean).map(shortRole).join(', ') || 'Your roles'}
             {data?.updatedAt && <><span className="pg-market-dot">·</span>Updated {ago(data.updatedAt)}</>}
             {onEditSettings && <button type="button" className="pg-market-link" onClick={onEditSettings}><Pencil size={12} /> Change</button>}
@@ -107,6 +119,17 @@ export default function MarketInsights({ location = '', roles = [], onEditSettin
           </button>
         </div>
       </div>
+
+      {!collapsed && locations.length > 1 && (
+        <div className="pg-market-places" role="tablist" aria-label="Location">
+          <MapPin size={14} />
+          {locations.map(l => (
+            <button key={l} type="button" role="tab" aria-selected={l === location} className={`pg-chip ${l === location ? 'active' : ''}`} onClick={() => pickPlace(l)}>
+              {placeName(l)}
+            </button>
+          ))}
+        </div>
+      )}
 
       {!collapsed && error && <p className="pg-notice is-error"><AlertTriangle size={15} /> {error}</p>}
 

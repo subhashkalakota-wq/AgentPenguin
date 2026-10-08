@@ -15,6 +15,7 @@ import {
   Save
 } from 'lucide-react';
 import { SCREENING_QUESTIONS, missingScreeningAnswers } from '../../shared/screeningQuestions';
+import { searchLocations } from '../../shared/locations';
 
 const EXPERIENCE_LEVELS = ['Internship', 'Entry level', 'Associate', 'Mid-Senior level', 'Director', 'Executive'];
 
@@ -37,7 +38,7 @@ function buildDraft(profile, config) {
     skillsText: (profile.skills || []).join(', '),
     screeningAnswers: { ...(profile.screeningAnswers || {}) },
     rolesText: roles.join(', '),
-    searchLocation: config.location || '',
+    searchLocation: searchLocations(config).join('; '),
     experienceLevel: config.experienceLevel || 'Mid-Senior level',
     maxApplications: config.maxApplications ?? 50,
     pacingDelaySec: config.pacingDelaySec ?? 6,
@@ -123,7 +124,8 @@ export default function ProfileTab({ profile, onSaveProfile, config, onSaveConfi
       ...config,
       searchQueries: roleList.length ? roleList : config.searchQueries,
       searchQuery: roleList[0] || config.searchQuery,
-      location: searchLocation,
+      locations: searchLocation.split(';').map(l => l.trim()).filter(Boolean),
+      location: searchLocation.split(';').map(l => l.trim()).find(Boolean) || '',
       experienceLevel,
       maxApplications: Math.max(1, Number(maxApplications) || 1),
       pacingDelaySec: Math.max(1, Number(pacingDelaySec) || 1),
@@ -493,7 +495,7 @@ export default function ProfileTab({ profile, onSaveProfile, config, onSaveConfi
                 <label htmlFor="pf-roles">Target roles (comma separated)</label>
                 <input id="pf-roles" className="pg-input" value={draft.rolesText} onChange={set('rolesText')} />
               </div>
-              {field('Search location', 'searchLocation')}
+              {field('Search locations (separate with ;)', 'searchLocation', { placeholder: 'Hyderabad; Bengaluru; Remote' })}
               {select('Experience level', 'experienceLevel', EXPERIENCE_LEVELS)}
               {field('Max applications per session', 'maxApplications', { type: 'number', min: 1, max: 200 })}
               {field('Delay between applications (seconds)', 'pacingDelaySec', { type: 'number', min: 1, max: 120 })}
@@ -504,7 +506,11 @@ export default function ProfileTab({ profile, onSaveProfile, config, onSaveConfi
               <div className="pg-span-2"><dt>Target roles</dt><dd>
                 {roles.length ? <div className="pg-tag-list pg-tag-list-inline">{roles.map(r => <span key={r} className="pg-tag-chip">{r}</span>)}</div> : <Value />}
               </dd></div>
-              <div><dt>Search location</dt><dd><Value>{config.location}</Value></dd></div>
+              <div><dt>Search locations</dt><dd>
+                {searchLocations(config).length
+                  ? <div className="pg-tag-list pg-tag-list-inline">{searchLocations(config).map(l => <span key={l} className="pg-tag-chip">{l}</span>)}</div>
+                  : <Value />}
+              </dd></div>
               <div><dt>Experience level</dt><dd><Value>{config.experienceLevel}</Value></dd></div>
               <div><dt>Max applications</dt><dd><Value>{config.maxApplications}</Value></dd></div>
               <div><dt>Delay between applications</dt><dd><Value>{config.pacingDelaySec ? `${config.pacingDelaySec}s` : ''}</Value></dd></div>

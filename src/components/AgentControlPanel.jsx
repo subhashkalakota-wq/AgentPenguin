@@ -1,6 +1,7 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { X, Plus, Search, Check, Minus, User, PlugZap } from 'lucide-react';
+import { X, Plus, Search, Check, Minus, User, PlugZap, MapPin } from 'lucide-react';
 import { PLATFORMS } from '../data/platforms';
+import { searchLocations } from '../../shared/locations';
 
 // Common tech roles offered as suggestions (any custom role can be typed too)
 const ROLE_SUGGESTIONS = [
@@ -13,6 +14,12 @@ const ROLE_SUGGESTIONS = [
   'QA / Test Automation Engineer', 'Security Engineer', 'UI Developer', 'Software Engineer Intern', 'Graduate Engineer Trainee',
 ];
 
+// Common places to search (any city or country can be typed)
+const LOCATION_SUGGESTIONS = [
+  'Hyderabad', 'Bengaluru', 'Chennai', 'Pune', 'Mumbai', 'Delhi', 'Noida', 'Gurugram', 'Kolkata', 'Ahmedabad',
+  'Kochi', 'Coimbatore', 'Visakhapatnam', 'Jaipur', 'Chandigarh', 'Indore', 'Remote', 'India',
+];
+
 const EXPERIENCE_LEVELS = ['Internship', 'Entry level', 'Associate', 'Mid-Senior level', 'Director'];
 const TARGET_PRESETS = [10, 25, 50, 100];
 const clamp = (n, min, max) => Math.min(max, Math.max(min, Number(n) || min));
@@ -20,6 +27,62 @@ const clamp = (n, min, max) => Math.min(max, Math.max(min, Number(n) || min));
 function initialRoles(config) {
   if (Array.isArray(config.searchQueries) && config.searchQueries.length) return config.searchQueries;
   return config.searchQuery ? [config.searchQuery] : [];
+}
+
+/** Removable chips plus a type-ahead box with suggestions (roles, locations). */
+function ChipPicker({ items, onChange, suggestions, placeholder, label, emptyText, icon: Icon = Search }) {
+  const [text, setText] = useState('');
+  const [open, setOpen] = useState(false);
+  const inputRef = useRef(null);
+  const matches = useMemo(() => {
+    const q = text.trim().toLowerCase();
+    return suggestions.filter(s => !items.some(i => i.toLowerCase() === s.toLowerCase()) && (!q || s.toLowerCase().includes(q))).slice(0, 8);
+  }, [text, items, suggestions]);
+
+  const add = (value) => {
+    const v = (value ?? text).trim();
+    if (!v) return;
+    if (!items.some(i => i.toLowerCase() === v.toLowerCase())) onChange([...items, v]);
+    setText('');
+    inputRef.current?.focus();
+  };
+
+  return (
+    <>
+      <div className="pg-role-chips">
+        {items.length === 0 && <span className="pg-settings-empty">{emptyText}</span>}
+        {items.map(r => (
+          <span key={r} className="pg-role-chip">
+            {r}
+            <button type="button" onClick={() => onChange(items.filter(x => x !== r))} aria-label={`Remove ${r}`}><X size={12} /></button>
+          </span>
+        ))}
+      </div>
+      <div className="pg-role-add">
+        <div className="pg-role-input">
+          <Icon size={14} />
+          <input
+            ref={inputRef}
+            value={text}
+            onChange={(e) => { setText(e.target.value); setOpen(true); }}
+            onFocus={() => setOpen(true)}
+            onBlur={() => setTimeout(() => setOpen(false), 150)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } }}
+            placeholder={placeholder}
+            aria-label={label}
+          />
+        </div>
+        <button type="button" className="pg-btn" onClick={() => add()} disabled={!text.trim()}><Plus size={14} /> Add</button>
+        {open && matches.length > 0 && (
+          <ul className="pg-role-suggest" role="listbox">
+            {matches.map(s => (
+              <li key={s}><button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => add(s)}>{s}</button></li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </>
+  );
 }
 
 function Stepper({ value, min, max, step = 1, onChange, label }) {
@@ -47,9 +110,7 @@ function Stepper({ value, min, max, step = 1, onChange, label }) {
  */
 export default function AgentControlPanel({ isOpen, onClose, config = {}, onSaveConfig, onOpenProfile, onOpenCdp }) {
   const [roles, setRoles] = useState(() => initialRoles(config));
-  const [roleInput, setRoleInput] = useState('');
-  const [showSuggest, setShowSuggest] = useState(false);
-  const [location, setLocation] = useState(config.location || '');
+  const [locations, setLocations] = useState(() => searchLocations(config));
   const [levels, setLevels] = useState(() => (Array.isArray(config.experienceLevels) ? config.experienceLevels : []));
   const [target, setTarget] = useState(config.maxApplications || 25);
   const [tabs, setTabs] = useState(config.parallelTabs ?? 5);
@@ -57,34 +118,21 @@ export default function AgentControlPanel({ isOpen, onClose, config = {}, onSave
   const [pacing, setPacing] = useState(config.pacingDelaySec ?? 6);
   const [platforms, setPlatforms] = useState(() => (Array.isArray(config.platforms) && config.platforms.length ? config.platforms : ['linkedin']));
   const [error, setError] = useState('');
-  const inputRef = useRef(null);
-
-  const suggestions = useMemo(() => {
-    const q = roleInput.trim().toLowerCase();
-    return ROLE_SUGGESTIONS.filter(r => !roles.includes(r) && (!q || r.toLowerCase().includes(q))).slice(0, 8);
-  }, [roleInput, roles]);
 
   if (!isOpen) return null;
 
-  const addRole = (title) => {
-    const t = (title || roleInput).trim();
-    if (!t) return;
-    if (!roles.some(r => r.toLowerCase() === t.toLowerCase())) setRoles([...roles, t]);
-    setRoleInput('');
-    setError('');
-    inputRef.current?.focus();
-  };
-  const removeRole = (r) => setRoles(roles.filter(x => x !== r));
   const toggle = (list, setList, v) => setList(list.includes(v) ? list.filter(x => x !== v) : [...list, v]);
 
   const save = () => {
     if (!roles.length) { setError('Add at least one role for Penguin to search for.'); return; }
+    if (!locations.length) { setError('Add at least one location (use "India" or "Remote" to search widely).'); return; }
     if (!platforms.length) { setError('Choose at least one job site.'); return; }
     const next = {
       ...config,
       searchQueries: roles,
       searchQuery: roles[0],
-      location: location.trim(),
+      locations,
+      location: locations[0],
       experienceLevels: levels,
       maxApplications: clamp(target, 1, 200),
       parallelTabs: clamp(tabs, 1, 15),
@@ -120,49 +168,42 @@ export default function AgentControlPanel({ isOpen, onClose, config = {}, onSave
               <span>Penguin searches each role in turn.</span>
             </div>
             <div className="pg-settings-control">
-              <div className="pg-role-chips">
-                {roles.length === 0 && <span className="pg-settings-empty">No roles yet. Add one below.</span>}
-                {roles.map(r => (
-                  <span key={r} className="pg-role-chip">
-                    {r}
-                    <button type="button" onClick={() => removeRole(r)} aria-label={`Remove ${r}`}><X size={12} /></button>
-                  </span>
-                ))}
-              </div>
-              <div className="pg-role-add">
-                <div className="pg-role-input">
-                  <Search size={14} />
-                  <input
-                    ref={inputRef}
-                    value={roleInput}
-                    onChange={(e) => { setRoleInput(e.target.value); setShowSuggest(true); }}
-                    onFocus={() => setShowSuggest(true)}
-                    onBlur={() => setTimeout(() => setShowSuggest(false), 150)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addRole(); } }}
-                    placeholder="Add a role, e.g. Java Developer"
-                    aria-label="Add a role"
-                  />
-                </div>
-                <button type="button" className="pg-btn" onClick={() => addRole()} disabled={!roleInput.trim()}><Plus size={14} /> Add</button>
-                {showSuggest && suggestions.length > 0 && (
-                  <ul className="pg-role-suggest" role="listbox">
-                    {suggestions.map(s => (
-                      <li key={s}><button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => addRole(s)}>{s}</button></li>
-                    ))}
-                  </ul>
-                )}
-              </div>
+              <ChipPicker
+                items={roles}
+                onChange={(next) => { setRoles(next); setError(''); }}
+                suggestions={ROLE_SUGGESTIONS}
+                placeholder="Add a role, e.g. Java Developer"
+                label="Add a role"
+                emptyText="No roles yet. Add one below."
+              />
             </div>
           </section>
 
           {/* Where */}
           <section className="pg-settings-section">
             <div className="pg-settings-label">
-              <h3>Location &amp; level</h3>
-              <span>Leave level empty for any level.</span>
+              <h3>Locations</h3>
+              <span>Penguin applies in every location you add. Job market shows these places.</span>
             </div>
             <div className="pg-settings-control">
-              <input className="pg-input" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="City or country, e.g. Hyderabad or India" aria-label="Location" />
+              <ChipPicker
+                items={locations}
+                onChange={(next) => { setLocations(next); setError(''); }}
+                suggestions={LOCATION_SUGGESTIONS}
+                placeholder="Add a city, e.g. Bengaluru"
+                label="Add a location"
+                emptyText="No locations yet. Add one below."
+                icon={MapPin}
+              />
+            </div>
+          </section>
+
+          <section className="pg-settings-section">
+            <div className="pg-settings-label">
+              <h3>Experience level</h3>
+              <span>Leave empty for any level.</span>
+            </div>
+            <div className="pg-settings-control">
               <div className="pg-toggle-row" role="group" aria-label="Experience level">
                 {EXPERIENCE_LEVELS.map(l => (
                   <button key={l} type="button" className={`pg-chip ${levels.includes(l) ? 'active' : ''}`} aria-pressed={levels.includes(l)} onClick={() => toggle(levels, setLevels, l)}>

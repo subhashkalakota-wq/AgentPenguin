@@ -9,6 +9,7 @@ import { createClient } from '@supabase/supabase-js';
 import { connectToUserChrome, bridgeReady } from './cdpClient.js';
 import { fetchGuestJobs, experienceFilter } from './linkedinFeed.js';
 import { getMarketInsights } from './marketInsights.js';
+import { searchLocations, placeName } from '../shared/locations.js';
 import { filterJobsWithLLM } from './llmFilter.js';
 import { applyToJobWithPlaywright, discardEasyApply } from './playwrightApplier.js';
 import {
@@ -63,7 +64,7 @@ registerAdminRoutes(app, supabaseAdmin, {
       parallelTabs: config.parallelTabs ?? 10,
       platforms: selectedPlatforms(),
       roles: Array.isArray(config.searchQueries) && config.searchQueries.length ? config.searchQueries : [config.searchQuery],
-      location: config.location,
+      location: searchLocations(config).join(' · '),
     },
     services: {
       supabase: Boolean(supabaseAdmin),
@@ -138,6 +139,16 @@ let candidateProfile = {
   resumePath: null,
   autoSubmit: true
 };
+
+// Applies settings from the dashboard. Older clients send only `location`; newer ones the
+// `locations` list. `location` always mirrors the first entry for code that reads one place.
+function mergeConfig(incoming = {}) {
+  config = { ...config, ...incoming };
+  if (!Array.isArray(incoming.locations) && typeof incoming.location === 'string') {
+    config.locations = incoming.location.trim() ? [incoming.location.trim()] : [];
+  }
+  config.location = searchLocations(config)[0] || '';
+}
 
 // Helper to push SSE events
 function broadcastEvent(eventType, payload) {
@@ -417,7 +428,7 @@ app.post('/api/start', async (req, res) => {
 
   if (req.body?.userId) currentUserId = req.body.userId;
   if (await rejectIfBlocked(req, res)) return;
-  if (req.body?.config) config = { ...config, ...req.body.config };
+  if (req.body?.config) mergeConfig(req.body.config);
   if (req.body?.profile) candidateProfile = { ...candidateProfile, ...req.body.profile };
 
   // Enforce mandatory resume upload
@@ -492,17 +503,17 @@ async function runAutonomousLoop() {
       return;
     }
 
-    addLog('cdp', 'RUN PLAN', `Applying on ${plan.map(k => PLATFORMS[k].label).join(', ')} for ${targetRoles.map(r => `"${r}"`).join(', ')}. Target: ${totalMax} applications — Penguin keeps searching until it gets there or you press Stop.`);
+    addLog('cdp', 'RUN PLAN', `Applying on ${plan.map(k => PLATFORMS[k].label).join(', ')} for ${targetRoles.map(r => `"${r}"`).join(', ')}${searchLocations(config).length ? ` in ${searchLocations(config).map(placeName).join(', ')}` : ''}. Target: ${totalMax} applications — Penguin keeps searching until it gets there or you press Stop.`);
 
     let totalApplied = 0;
-    const emitProgress = (platform, role) => broadcastEvent('runProgress', {
-      platform, platformLabel: PLATFORMS[platform]?.label, role, applied: totalApplied, cap: totalMax,
+    const emitProgress = (platform, role, location = '') => broadcastEvent('runProgress', {
+      platform, platformLabel: PLATFORMS[platform]?.label, role, location, applied: totalApplied, cap: totalMax,
       platforms: plan, platformIndex: plan.indexOf(platform),
     });
 
     // Applies to a shortlist using several tabs at once (config.parallelTabs, 1-15).
     // Each tab takes the next job from a shared queue; the quota is never exceeded.
-    const applyInParallel = async (key, role, shortlist, quota) => {
+    const applyInParallel = async (key, role, shortlist, quota, where = '') => {
       const adapter = ADAPTERS[key];
       const label = PLATFORMS[key].label;
       const queue = [...shortlist];
@@ -566,7 +577,7 @@ async function runAutonomousLoop() {
               job.applied_at = new Date().toISOString();
               job.stepsCompleted = job.stepsTotal;
               broadcastEvent('jobs', jobs);
-              emitProgress(key, role);
+              emitProgress(key, role, where);
               await persistApplication(job, result);
             } else if (result.reason === 'login_required') {
               markNeedsReview(job, result);
@@ -608,81 +619,88 @@ async function runAutonomousLoop() {
       return { stop, applied: appliedForSlot };
     };
 
-    // Keep searching deeper result pages (round 0, 1, 2...) for every platform × role
+    // Keep searching deeper result pages (round 0, 1, 2...) for every platform × role × location
     // until the target is reached, the user stops, or no platform has new listings.
     const seenIds = new Set(jobs.filter(j => j.status === 'applied' || j.status === 'needs_review').map(j => String(j.id)));
-    const exhausted = new Set(); // "platform|role" slots with no new listings left
+    const exhausted = new Set(); // "platform|role|location" slots with no new listings left
+    const locations = searchLocations(config);
+    if (!locations.length) locations.push('');
     const BATCH = 25;
     let round = 0;
+    const blockPlatform = (key) => targetRoles.forEach(r => locations.forEach(l => exhausted.add(`${key}|${r}|${l}`)));
 
     runLoop:
     while (totalApplied < totalMax && agentState !== 'idle' && agentState !== 'completed') {
       let activeSlots = 0;
       for (const key of plan) {
         const adapter = ADAPTERS[key];
+        const label = PLATFORMS[key].label;
         for (const role of targetRoles) {
-          while (agentState === 'paused') await sleep(1000);
-          if (agentState !== 'running' || totalApplied >= totalMax) break runLoop;
-          const slot = `${key}|${role}`;
-          if (exhausted.has(slot)) continue;
-          activeSlots++;
+          for (const where of locations) {
+            while (agentState === 'paused') await sleep(1000);
+            if (agentState !== 'running' || totalApplied >= totalMax) break runLoop;
+            const slot = `${key}|${role}|${where}`;
+            if (exhausted.has(slot)) continue;
+            activeSlots++;
+            const inPlace = where ? ` in ${placeName(where)}` : '';
 
-          const page = findPlatformPage(browser, key);
-          if (!page) {
-            addLog('warn', 'PLATFORM TAB CLOSED', `${PLATFORMS[key].label} tab was closed. Skipping it — reopen it to include it again.`);
-            targetRoles.forEach(r => exhausted.add(`${key}|${r}`));
-            continue;
-          }
-          await page.bringToFront().catch(() => {});
-          emitProgress(key, role);
-          addLog('scrape', 'SEARCH', `[${PLATFORMS[key].label}] Searching "${role}"${round ? ` (results page ${round + 1})` : ''} — ${totalApplied}/${totalMax} applied so far...`);
-
-          let scraped = [];
-          try {
-            scraped = await adapter.scrape(page, role, config.location, BATCH, round);
-          } catch (err) {
-            if (err.reason === 'login_required' || err.reason === 'verification_required') {
-              addLog('warn', 'ACTION REQUIRED', err.reason === 'login_required'
-                ? `[${PLATFORMS[key].label}] Please sign in to ${PLATFORMS[key].label} in Chrome. Skipping ${PLATFORMS[key].label} for now.`
-                : `[${PLATFORMS[key].label}] ${PLATFORMS[key].label} is showing a security check. Open its tab, make sure pages load normally. Skipping ${PLATFORMS[key].label} for now.`);
-              targetRoles.forEach(r => exhausted.add(`${key}|${r}`));
+            const page = findPlatformPage(browser, key);
+            if (!page) {
+              addLog('warn', 'PLATFORM TAB CLOSED', `${label} tab was closed. Skipping it — reopen it to include it again.`);
+              blockPlatform(key);
               continue;
             }
-            addLog('warn', 'SEARCH FAILED', `[${PLATFORMS[key].label}] ${err.message}`);
-            exhausted.add(slot);
-            continue;
-          }
-          const fresh = scraped.filter(j => !seenIds.has(String(j.id)));
-          fresh.forEach(j => seenIds.add(String(j.id)));
-          addLog('scrape', 'FOUND LISTINGS', `[${PLATFORMS[key].label}] ${fresh.length} new listings for "${role}".`);
-          if (fresh.length === 0) {
-            exhausted.add(slot);
-            addLog('scrape', 'NO MORE LISTINGS', `[${PLATFORMS[key].label}] No more new listings for "${role}".`);
-            continue;
-          }
+            await page.bringToFront().catch(() => {});
+            emitProgress(key, role, where);
+            addLog('scrape', 'SEARCH', `[${label}] Searching "${role}"${inPlace}${round ? ` (results page ${round + 1})` : ''} — ${totalApplied}/${totalMax} applied so far...`);
 
-          const evaluated = await filterJobsWithLLM(fresh, candidateProfile, config.minMatchScore, role);
-          evaluated.forEach(j => { j.targetRole = role; j.platform = key; });
-          for (const ej of evaluated) {
-            if (!jobs.find(j => String(j.id) === String(ej.id))) jobs.push(ej);
-          }
-          broadcastEvent('jobs', jobs);
+            let scraped = [];
+            try {
+              scraped = await adapter.scrape(page, role, where, BATCH, round);
+            } catch (err) {
+              if (err.reason === 'login_required' || err.reason === 'verification_required') {
+                addLog('warn', 'ACTION REQUIRED', err.reason === 'login_required'
+                  ? `[${label}] Please sign in to ${label} in Chrome. Skipping ${label} for now.`
+                  : `[${label}] ${label} is showing a security check. Open its tab, make sure pages load normally. Skipping ${label} for now.`);
+                blockPlatform(key);
+                continue;
+              }
+              addLog('warn', 'SEARCH FAILED', `[${label}] ${err.message}`);
+              exhausted.add(slot);
+              continue;
+            }
+            const fresh = scraped.filter(j => !seenIds.has(String(j.id)));
+            fresh.forEach(j => seenIds.add(String(j.id)));
+            addLog('scrape', 'FOUND LISTINGS', `[${label}] ${fresh.length} new listings for "${role}"${inPlace}.`);
+            if (fresh.length === 0) {
+              exhausted.add(slot);
+              addLog('scrape', 'NO MORE LISTINGS', `[${label}] No more new listings for "${role}"${inPlace}.`);
+              continue;
+            }
 
-          let shortlist = evaluated.filter(j => j.status === 'shortlisted');
-          if (shortlist.length === 0) {
-            // Nothing cleared the bar: still try the closest matches rather than applying to nothing
-            shortlist = [...evaluated].sort((a, b) => (b.matchScore || 0) - (a.matchScore || 0)).slice(0, Math.ceil(evaluated.length / 2));
-            shortlist.forEach(j => { j.status = 'shortlisted'; });
-            addLog('llm', 'BEST MATCHES', `[${PLATFORMS[key].label}] No listing met the ${config.minMatchScore}% bar for "${role}", so trying the ${shortlist.length} closest matches.`);
-          }
-          addLog('llm', 'SHORTLIST READY', `[${PLATFORMS[key].label}] ${shortlist.length} matches for "${role}".`);
+            const evaluated = await filterJobsWithLLM(fresh, candidateProfile, config.minMatchScore, role);
+            evaluated.forEach(j => { j.targetRole = role; j.platform = key; j.searchLocation = where; });
+            for (const ej of evaluated) {
+              if (!jobs.find(j => String(j.id) === String(ej.id))) jobs.push(ej);
+            }
+            broadcastEvent('jobs', jobs);
 
-          const outcome = await applyInParallel(key, role, shortlist, totalMax - totalApplied);
-          if (outcome.stop) break runLoop;
+            let shortlist = evaluated.filter(j => j.status === 'shortlisted');
+            if (shortlist.length === 0) {
+              // Nothing cleared the bar: still try the closest matches rather than applying to nothing
+              shortlist = [...evaluated].sort((a, b) => (b.matchScore || 0) - (a.matchScore || 0)).slice(0, Math.ceil(evaluated.length / 2));
+              shortlist.forEach(j => { j.status = 'shortlisted'; });
+              addLog('llm', 'BEST MATCHES', `[${label}] No listing met the ${config.minMatchScore}% bar for "${role}"${inPlace}, so trying the ${shortlist.length} closest matches.`);
+            }
+            addLog('llm', 'SHORTLIST READY', `[${label}] ${shortlist.length} matches for "${role}"${inPlace}.`);
+
+            const outcome = await applyInParallel(key, role, shortlist, totalMax - totalApplied, where);
+            if (outcome.stop) break runLoop;
+          }
         }
       }
       if (activeSlots === 0) {
-        if (agentState === 'running') addLog('warn', 'OUT OF LISTINGS', `Penguin went through every listing it could find and applied to ${totalApplied} of ${totalMax}. Add more target roles or widen the location to find more.`);
+        if (agentState === 'running') addLog('warn', 'OUT OF LISTINGS', `Penguin went through every listing it could find and applied to ${totalApplied} of ${totalMax}. Add more roles or locations in Run settings to find more.`);
         break;
       }
       round++;
@@ -706,7 +724,7 @@ app.get('/api/market', async (req, res) => {
     const roles = String(req.query.roles || '').split('|').map(r => r.trim()).filter(Boolean);
     const fallbackRoles = Array.isArray(config.searchQueries) && config.searchQueries.length ? config.searchQueries : [config.searchQuery];
     res.json(await getMarketInsights({
-      location: String(req.query.location || candidateProfile.location || config.location || ''),
+      location: String(req.query.location || searchLocations(config)[0] || ''),
       roles: roles.length ? roles : fallbackRoles,
       refresh: req.query.refresh === '1',
     }));
@@ -943,7 +961,7 @@ app.post('/api/resume/analyze', async (req, res) => {
 
 // 7. Save Configuration
 app.post('/api/config', (req, res) => {
-  if (req.body?.config) config = { ...config, ...req.body.config };
+  if (req.body?.config) mergeConfig(req.body.config);
   if (req.body?.profile) candidateProfile = { ...candidateProfile, ...req.body.profile };
   addLog('cdp', 'CONFIG UPDATED', 'Search parameters and candidate profile updated.');
   broadcastEvent('config', { config, candidateProfile });
