@@ -7,7 +7,7 @@ import path from 'path';
 import fs from 'fs';
 import { createClient } from '@supabase/supabase-js';
 import { connectToUserChrome, bridgeReady } from './cdpClient.js';
-import { fetchGuestJobs } from './linkedinFeed.js';
+import { fetchGuestJobs, experienceFilter } from './linkedinFeed.js';
 import { filterJobsWithLLM } from './llmFilter.js';
 import { applyToJobWithPlaywright, discardEasyApply } from './playwrightApplier.js';
 import {
@@ -240,7 +240,12 @@ const ADAPTERS = {
       const found = [];
       const first = round * max;
       for (let start = first; start < first + max && start < 1000; start += 10) {
-        const batch = await fetchGuestJobs(page, { keywords: role, location: (location || '').split(/[,(/]/)[0].trim(), start });
+        const batch = await fetchGuestJobs(page, {
+          keywords: role,
+          location: (location || '').split(/[,(/]/)[0].trim(),
+          start,
+          experience: experienceFilter(config.experienceLevels),
+        });
         if (!batch.length) break;
         for (const j of batch) {
           if (!found.some(f => f.id === j.id)) {

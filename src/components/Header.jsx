@@ -58,7 +58,9 @@ export default function Header({
   pageTitle = '',
   onOpenMobileNav,
   onOpenCdp,
-  onResume
+  onResume,
+  roles = [],
+  runProgress = null
 }) {
   const [isSidePanelOpen, setIsSidePanelOpen] = useState(false);
   const isRunning = agentState === 'running';
@@ -68,7 +70,12 @@ export default function Header({
   const avatarUrl = currentUser?.user_metadata?.avatar_url || currentUser?.user_metadata?.picture;
   const isGoogleUser = currentUser?.app_metadata?.provider === 'google' || currentUser?.identities?.some(id => id.provider === 'google');
   const initials = userName.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() || 'U';
-  const capPct = maxCap > 0 ? Math.min(100, (appliedCount / maxCap) * 100) : 0;
+  // This run's progress (the all-time count lives on the Applications tab)
+  const isActive = isRunning || isPaused;
+  const runApplied = runProgress?.applied ?? 0;
+  const capPct = maxCap > 0 ? Math.min(100, (runApplied / maxCap) * 100) : 0;
+  const roleList = roles.filter(Boolean);
+  const currentRole = isActive ? runProgress?.role : null;
 
   return (
     <header className="pg-header">
@@ -93,6 +100,30 @@ export default function Header({
         </button>
         <span className="pg-title-divider" aria-hidden="true" />
         <h1 className="pg-page-title">{pageTitle}</h1>
+
+        {/* Run summary: how many jobs this run is applying to, and for which roles */}
+        <div
+          className={`pg-run-summary ${isRunning ? 'is-live' : ''}`}
+          title={`${isActive ? `${runApplied} of ${maxCap} applied` : `Target: ${maxCap} applications`} — Roles: ${roleList.join(', ') || 'none set'}`}
+        >
+          <span className="pg-run-summary-count">
+            {isRunning && <span className="pg-run-summary-dot" aria-hidden="true" />}
+            <span>
+              {isActive
+                ? <>{isPaused ? 'Paused · ' : 'Applying · '}<strong>{runApplied}</strong> of {maxCap} sent</>
+                : <>Target <strong>{maxCap}</strong> applications</>}
+            </span>
+          </span>
+          <span className="pg-run-summary-roles">
+            {roleList.length === 0 && <button type="button" className="pg-run-summary-set" onClick={onOpenSettings}>Set roles</button>}
+            {roleList.map((r, i) => (
+              <React.Fragment key={r}>
+                {i > 0 && <span className="pg-run-summary-sep" aria-hidden="true">·</span>}
+                <span className={r === currentRole ? 'is-current' : ''}>{r}</span>
+              </React.Fragment>
+            ))}
+          </span>
+        </div>
 
         <button
           type="button"
@@ -156,10 +187,10 @@ export default function Header({
             {cdpStatus?.connected ? <Wifi size={13} /> : <WifiOff size={13} />}
             CDP {cdpStatus?.connected ? 'connected' : 'offline'}
           </button>
-          <div className="pg-quota" title="Applications submitted against session cap">
+          <div className="pg-quota" title={`This run: ${runApplied} of ${maxCap} applications sent · ${appliedCount} sent in total`}>
             <div className="pg-quota-text">
-              <span>Quota</span>
-              <strong>{appliedCount} / {maxCap}</strong>
+              <span>This run</span>
+              <strong>{runApplied} / {maxCap}</strong>
             </div>
             <div className="pg-quota-track"><div className="pg-quota-fill" style={{ width: `${capPct}%` }} /></div>
           </div>

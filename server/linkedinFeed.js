@@ -32,8 +32,17 @@ export function parseGuestJobs(html) {
 }
 
 /** Fetches one page (10 jobs) of Easy Apply listings. `page` must be a LinkedIn tab. */
-export async function fetchGuestJobs(page, { keywords, location, start = 0 }) {
-  const url = `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=${encodeURIComponent(keywords)}&location=${encodeURIComponent(location || '')}&f_AL=true&sortBy=DD&start=${start}`;
+// LinkedIn's experience-level filter (f_E) codes
+const EXPERIENCE_CODES = { internship: 1, 'entry level': 2, associate: 3, 'mid-senior level': 4, director: 5, executive: 6 };
+
+/** f_E value for the chosen levels, e.g. ['Entry level', 'Associate'] -> "2,3" ('' = any level). */
+export function experienceFilter(levels) {
+  const list = (Array.isArray(levels) ? levels : [levels]).map(l => EXPERIENCE_CODES[String(l || '').toLowerCase()]).filter(Boolean);
+  return [...new Set(list)].sort().join(',');
+}
+
+export async function fetchGuestJobs(page, { keywords, location, start = 0, experience = '' }) {
+  const url = `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=${encodeURIComponent(keywords)}&location=${encodeURIComponent(location || '')}&f_AL=true&sortBy=DD&start=${start}${experience ? `&f_E=${encodeURIComponent(experience)}` : ''}`;
   const html = await page.evaluate(async (u) => {
     const res = await fetch(u, { credentials: 'omit' });
     return res.ok ? res.text() : '';

@@ -690,12 +690,13 @@ export default function App() {
   const sharedOverlays = (
     <>
       <AgentControlPanel
+        key={isConfigOpen ? 'open' : 'closed'}
         isOpen={isConfigOpen}
         onClose={() => closeOverlay(['/config', '/settings'], setIsConfigOpen)}
         config={config}
         onSaveConfig={handleSaveConfig}
-        candidateProfile={profile}
-        onSaveProfile={handleSaveProfile}
+        onOpenProfile={() => { setIsConfigOpen(false); navigateTo('/profile'); }}
+        onOpenCdp={() => { setIsConfigOpen(false); navigateTo('/cdp'); }}
       />
       <HowToRunModal
         isOpen={isHowToRunOpen}
@@ -938,6 +939,8 @@ export default function App() {
         onOpenMobileNav={() => setMobileNavOpen(true)}
         onOpenCdp={() => openTab('cdp')}
         onResume={handleResume}
+        roles={Array.isArray(config.searchQueries) && config.searchQueries.length ? config.searchQueries : [config.searchQuery].filter(Boolean)}
+        runProgress={runProgress}
       />
 
       <main className="dashboard-content pg-main">
