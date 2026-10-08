@@ -1,7 +1,8 @@
 import { createClient } from '@supabase/supabase-js';
 
-export const SUPABASE_URL = 'https://mmggjxakzkfqqkiqkhlo.supabase.co';
-export const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1tZ2dqeGFremtmcXFraXFraGxvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTEwOTI3MzAsImV4cCI6MjEwNjY2ODczMH0.v0gWHCpVek7Q8rk4a6rYjhWfCb1u59-D75X1WRYv0fs';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './supabaseConfig';
+
+export { SUPABASE_URL, SUPABASE_ANON_KEY };
 
 // Client for Frontend UI (uses Anon Key with user session)
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {

@@ -1,15 +1,15 @@
 import { createClient } from '@supabase/supabase-js';
-import { SUPABASE_URL, SUPABASE_ANON_KEY } from '../lib/supabase';
-import { API_BASE } from '../lib/api';
+import { SUPABASE_URL, SUPABASE_ANON_KEY, API_BASE } from '../lib/supabaseConfig';
 
 // The admin portal keeps its own session (separate storage key), so signing in as an
-// admin never signs the user app in or out, and the other way round.
+// admin never signs the user app in or out, and the other way round. It reads the
+// Google sign-in result from the URL when Google sends the admin back to /admin.
 export const adminSupabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
     storageKey: 'agent-penguin-admin-auth',
     persistSession: true,
     autoRefreshToken: true,
-    detectSessionInUrl: false,
+    detectSessionInUrl: true,
   },
 });
 

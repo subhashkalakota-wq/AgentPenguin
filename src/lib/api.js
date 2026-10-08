@@ -1,6 +1,7 @@
 import { supabase } from './supabase';
+import { API_BASE } from './supabaseConfig';
 
-export const API_BASE = 'http://localhost:3001';
+export { API_BASE };
 
 // fetch() to the backend with the signed-in user's Supabase access token, so the
 // server can verify who is calling (admin checks, blocked-user checks).
