@@ -148,6 +148,15 @@ async function readFields(dialog) {
       }
     }
 
+    // Sliders (rating scales)
+    for (const el of d.querySelectorAll('input[type="range"]')) {
+      if (!visible(el) || el.disabled) continue;
+      const min = Number(el.min || 0), max = Number(el.max || 100);
+      const raw = rawLabelOf(el);
+      // A slider always has a value, so "empty" means Penguin hasn't set it yet
+      out.push({ key: tag(el), type: 'range', question: `${clean(raw)} (scale ${min} to ${max})`, min, max, required: true, empty: !el.dataset.pgSet });
+    }
+
     // Choice groups: native radios by name, custom [role=radio] by their radiogroup
     const groups = new Map();
     for (const r of d.querySelectorAll('input[type="radio"], [role="radio"]:not(input)')) {
@@ -284,7 +293,7 @@ async function fillStep(dialog, profile, onProgress, { forceAll = false } = {}) 
 
     // LinkedIn uses plain text inputs for numeric answers
     const fieldType = f.type === 'text' && /how many|years|experience|number of|ctc|salary|notice period/i.test(f.question) ? 'number' : f.type;
-    const askType = f.type === 'checkbox-group' ? 'radio' : fieldType;
+    const askType = f.type === 'checkbox-group' ? 'multi' : (f.type === 'range' ? 'number' : fieldType);
     const result = await answerQuestion({ question: f.question || 'Select one option', type: askType, options: f.options || [] }, profile, { force: f.required || forceAll });
     if (!result) {
       if (f.required) unanswered.push(f.question || 'Unlabelled question');
@@ -295,7 +304,23 @@ async function fillStep(dialog, profile, onProgress, { forceAll = false } = {}) 
     if (f.type === 'select') {
       const i = optionIndex(f.options, answer);
       await dialog.locator(`[data-pg-field="${f.key}"]`).selectOption({ label: f.options[Math.max(0, i)] }).catch(() => {});
-    } else if (f.type === 'radio' || f.type === 'checkbox-group') {
+    } else if (f.type === 'checkbox-group') {
+      // Select all that apply: tick every chosen option
+      const wanted = (Array.isArray(answer) ? answer : [answer]).map(a => optionIndex(f.options, a)).filter(i => i >= 0);
+      let ticked = 0;
+      for (const i of (wanted.length ? [...new Set(wanted)] : [0])) if (await clickChoice(dialog, `${f.key}-${i}`)) ticked++;
+      if (!ticked) { unanswered.push(f.question || 'A multiple-choice question'); continue; }
+    } else if (f.type === 'range') {
+      // Slider: clamp to its range and fire the events a person's drag would
+      const n = Number(String(answer).match(/\d+(\.\d+)?/)?.[0] ?? f.max);
+      const v = Math.min(f.max, Math.max(f.min, n));
+      await dialog.locator(`[data-pg-field="${f.key}"]`).evaluate((el, val) => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, String(val));
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        el.dataset.pgSet = '1';
+      }, v).catch(() => {});
+    } else if (f.type === 'radio') {
       let i = optionIndex(f.options, answer);
       if (i < 0) i = Math.max(0, optionIndex(f.options, 'Yes'));
       if (!(await clickChoice(dialog, `${f.key}-${i}`))) {
@@ -327,7 +352,7 @@ async function fillStep(dialog, profile, onProgress, { forceAll = false } = {}) 
     onProgress({
       type: source === 'auto-pick' ? 'warn' : 'llm',
       tag: tags[source] || 'AUTO ANSWER',
-      message: `"${f.question.slice(0, 80)}" → ${(fieldType === 'number' ? (String(answer).match(/\d+(\.\d+)?/)?.[0] ?? '0') : String(answer)).slice(0, 60)}${source === 'auto-pick' ? ' (required; picked automatically — check later)' : ''}`
+      message: `"${(f.question || 'Unlabelled question').slice(0, 80)}" → ${(Array.isArray(answer) ? answer.join(', ') : fieldType === 'number' ? (String(answer).match(/\d+(\.\d+)?/)?.[0] ?? '0') : String(answer)).slice(0, 60)}${source === 'auto-pick' ? ' (required; picked automatically — check later)' : ''}`
     });
     await randomSleep(250, 500);
   }

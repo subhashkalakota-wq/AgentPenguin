@@ -46,7 +46,40 @@ const supabaseAdmin = (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_
     })
   : null;
 
-registerAdminRoutes(app, supabaseAdmin);
+// Live agent state for the admin portal (read lazily, after the state below exists)
+registerAdminRoutes(app, supabaseAdmin, {
+  snapshot: () => ({
+    agentState,
+    cdpConnected: Boolean(cdpConnection.browser?.isConnected?.()),
+    runUserId: currentUserId,
+    run: {
+      found: jobs.length,
+      applied: jobs.filter(j => j.status === 'applied').length,
+      needsReview: jobs.filter(j => j.status === 'needs_review').length,
+    },
+    config: {
+      maxApplications: config.maxApplications,
+      parallelTabs: config.parallelTabs ?? 10,
+      platforms: selectedPlatforms(),
+      roles: Array.isArray(config.searchQueries) && config.searchQueries.length ? config.searchQueries : [config.searchQuery],
+      location: config.location,
+    },
+    services: {
+      supabase: Boolean(supabaseAdmin),
+      groq: Boolean(process.env.GROQ_API_KEY),
+      openai: Boolean(process.env.OPENAI_API_KEY),
+      gemini: Boolean(process.env.GEMINI_API_KEY),
+    },
+    logs: logs.slice(-150),
+  }),
+  stopAgent: (adminEmail) => {
+    if (agentState !== 'running' && agentState !== 'paused') return false;
+    agentState = 'idle';
+    broadcastEvent('agentState', agentState);
+    addLog('warn', 'AGENT STOPPED', `Agent stopped by an admin (${adminEmail}).`);
+    return true;
+  },
+});
 
 // Rejects requests from blocked users. Uses the verified Supabase token when present.
 async function rejectIfBlocked(req, res) {

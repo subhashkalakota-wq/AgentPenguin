@@ -10,8 +10,7 @@ export default function Sidebar({
   tabCounts = {},
   isRunning = false,
   isProfileComplete = true,
-  cdpConnected = false,
-  isAdmin = false
+  cdpConnected = false
 }) {
   // Hover to open, move away to close. Small delays stop it flickering when
   // the cursor just passes over the edge of the screen.
@@ -53,7 +52,7 @@ export default function Sidebar({
         </div>
 
         <nav className="pg-side-nav">
-          {DASHBOARD_TABS.filter(t => !t.adminOnly || isAdmin).map(({ key, label, icon: Icon }) => (
+          {DASHBOARD_TABS.map(({ key, label, icon: Icon }) => (
             <button
               key={key}
               type="button"

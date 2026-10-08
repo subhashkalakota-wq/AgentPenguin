@@ -7,7 +7,6 @@ import PlatformPickerModal from './components/PlatformPickerModal';
 import PlatformsBanner from './components/PlatformsBanner';
 import PenguinWelcome from './components/PenguinWelcome';
 import CdpReminder from './components/CdpReminder';
-import AdminPage from './components/AdminPage';
 import RunningPenguinOverlay, { RunningPenguinPill } from './components/RunningPenguinOverlay';
 import LiveBrowserViewport from './components/LiveBrowserViewport';
 import LiveExecutionTrace from './components/LiveExecutionTrace';
@@ -70,7 +69,6 @@ export default function App() {
       case '/activity':        return { view: 'dashboard', tab: 'activity' };
       case '/profile':         return { view: 'dashboard', tab: 'profile' };
       case '/cdp':             return { view: 'dashboard', tab: 'cdp' };
-      case '/admin':           return { view: 'dashboard', tab: 'admin' };
       case '/viso-dsa':        return { view: 'viso-dsa' };
       case '/resume-analyzer': return { view: 'resume-analyzer' };
       case '/config':
@@ -93,7 +91,6 @@ export default function App() {
     try { return sessionStorage.getItem('pg_entered_world') === '1'; } catch { return false; }
   });
   const [worldJustEntered, setWorldJustEntered] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
   const [loginNotice, setLoginNotice] = useState('');
   const [showPlatformPicker, setShowPlatformPicker] = useState(false);
   const [runProgress, setRunProgress] = useState(null);
@@ -356,17 +353,16 @@ export default function App() {
     };
   }, [currentUser, loadJobsFromSupabase]);
 
-  // Ask the backend (which verifies the Supabase token) whether this user is an
-  // admin or has been blocked. Blocked users are signed out.
+  // Ask the backend (which verifies the Supabase token) whether this user has been
+  // blocked. Blocked users are signed out. (Admins use the separate /admin console.)
   useEffect(() => {
-    if (!currentUser) { setIsAdmin(false); return undefined; }
+    if (!currentUser) return undefined;
     let alive = true;
     const check = async () => {
       try {
         const res = await authFetch('/api/me');
         const me = await res.json();
         if (!alive) return;
-        setIsAdmin(Boolean(me.isAdmin));
         if (me.blocked) {
           setLoginNotice('Your account has been blocked by an administrator. Contact support if you think this is a mistake.');
           await supabase.auth.signOut().catch(() => {});
@@ -872,13 +868,6 @@ export default function App() {
             isProfileReady={profileReady}
           />
         );
-      case 'admin':
-        return isAdmin ? <AdminPage /> : (
-          <div className="pg-card pg-empty">
-            <strong>Admins only</strong>
-            <span>Your account doesn't have access to the admin page.</span>
-          </div>
-        );
       case 'cdp':
         return (
           <CdpTab
@@ -921,7 +910,6 @@ export default function App() {
         isRunning={agentState === 'running'}
         isProfileComplete={profileReady}
         cdpConnected={cdpStatus.connected}
-        isAdmin={isAdmin}
       />
 
       <div className="pg-shell-main">
@@ -953,7 +941,7 @@ export default function App() {
       />
 
       <main className="dashboard-content pg-main">
-        {!profileReady && dashTab !== 'profile' && dashTab !== 'admin' && (
+        {!profileReady && dashTab !== 'profile' && (
           <div className="pg-callout">
             <div>
               <strong>Finish your profile to start applying</strong>
@@ -971,7 +959,7 @@ export default function App() {
           </div>
         )}
 
-        {!detailPageJob && dashTab !== 'cdp' && dashTab !== 'admin' && (
+        {!detailPageJob && dashTab !== 'cdp' && (
           <CdpReminder
             connected={cdpStatus.connected}
             onOpenCdp={() => openTab('cdp')}

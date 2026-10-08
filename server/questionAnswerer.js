@@ -7,9 +7,14 @@
  * 3. Otherwise returns null so the caller can flag the job for manual review
  *    instead of submitting a made-up answer.
  *
- * answerQuestion({ question, type, options }, profile) -> string | null
- *   type: 'text' | 'number' | 'textarea' | 'select' | 'radio' | 'checkbox'
- *   For select/radio the returned string is one of `options` exactly.
+ * answerQuestion({ question, type, options }, profile) -> { answer, source } | null
+ *   type: 'text' | 'number' | 'textarea' | 'select' | 'radio' | 'multi'
+ *   select/radio: `answer` is one of `options` exactly. multi: an array of options.
+ *
+ * Covers every common question format: single / multiple choice, select-all-that-apply,
+ * Yes/No, True/False, either/or, best / most / least appropriate answer, and scales
+ * (1–5 / 1–10 ratings, Likert agree–disagree, Beginner–Expert, confidence, frequency,
+ * importance). Skill ratings come from the analysed resume: not on the resume = lowest level.
  */
 
 import { llmJson, hasLLM } from './llm.js';
@@ -30,6 +35,69 @@ function pickOption(options, ...wanted) {
   }
   return null;
 }
+
+// ---- Scales: rating, Likert, proficiency, confidence, frequency, importance ----
+// Each option gets a level from 0 (lowest) to 1 (highest); the first matching pattern wins.
+const LEVEL_PATTERNS = [
+  [/very poor|terrible|awful/, 0], [/\bpoor\b/, 0.2], [/\b(fair|average|okay|ok)\b/, 0.5], [/excellent|outstanding|exceptional/, 1], [/very good/, 0.85], [/\bgood\b/, 0.7],
+  [/strongly disagree|completely disagree/, 0], [/(somewhat|slightly|mildly) disagree/, 0.3], [/disagree/, 0.15],
+  [/neither|neutral|undecided|no opinion/, 0.5],
+  [/strongly agree|completely agree/, 1], [/(somewhat|slightly|mildly) agree/, 0.65], [/\bagree/, 0.8],
+  [/^never|almost never/, 0], [/rarely|seldom/, 0.2], [/sometimes|occasionally/, 0.5], [/almost always/, 0.9], [/often|frequently|usually|most of the time/, 0.78], [/^always/, 1],
+  [/not (at all |very )?(important|confident|familiar|comfortable|likely|satisfied)/, 0], [/slightly|a little/, 0.25], [/somewhat|moderately|fairly/, 0.5], [/extremely|highly|completely/, 1], [/\bvery\b/, 0.85],
+  [/^(none|no experience|no knowledge|not applicable|n\/a)/, 0], [/fundamental|awareness|novice|beginner|basic|elementary|limited|entry/, 0.2],
+  [/intermediate|working knowledge|competent|moderate/, 0.5], [/advanced|proficient|professional|skilled|strong/, 0.78], [/expert|master|native|bilingual|fluent/, 1],
+  [/^(important|confident|familiar|comfortable|likely|satisfied)$/, 0.7],
+];
+
+/** Levels (0–1) for each option when the options form a scale, else null. */
+function scaleLevels(options) {
+  if (!options || options.length < 3) return null;
+  const nums = options.map(o => { const m = String(o).trim().match(/^(\d+(?:\.\d+)?)(?!\d)/); return m ? Number(m[1]) : null; });
+  if (nums.every(n => n != null)) {
+    const min = Math.min(...nums), max = Math.max(...nums);
+    return max > min ? nums.map(n => (n - min) / (max - min)) : null;
+  }
+  const levels = options.map(o => { const n = norm(o); const hit = LEVEL_PATTERNS.find(([re]) => re.test(n)); return hit ? hit[1] : null; });
+  return levels.filter(l => l != null).length >= options.length - 1 ? levels : null;
+}
+
+function pickLevel(options, levels, target) {
+  let best = -1, bestDiff = Infinity;
+  levels.forEach((l, i) => { if (l != null && Math.abs(l - target) < bestDiff) { bestDiff = Math.abs(l - target); best = i; } });
+  return best >= 0 ? options[best] : null;
+}
+
+// Escapes a skill name for use inside a word-boundary regex
+const reSafe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * How strong the candidate is in the skill a rating question asks about (0–1), from the
+ * resume. A named skill missing from the resume is 0. Null when no skill can be identified.
+ */
+function skillLevel(question, profile) {
+  const q = norm(question);
+  const ra = profile.resumeAnalysis || {};
+  if (/\benglish\b/.test(q)) return 0.85;
+  const langs = (ra.languages || []).map(norm);
+  const lang = langs.find(l => l && new RegExp(`\\b${reSafe(l)}\\b`).test(q));
+  if (lang) return 0.85;
+  const listed = [...(ra.skills || []), ...((profile.skills || []).map(name => ({ name, years: null })))];
+  const hit = listed.find(sk => {
+    const n = norm(sk.name || '');
+    return n.length >= 2 && new RegExp(`(^|[^a-z0-9+#])${reSafe(n)}($|[^a-z0-9+#])`).test(q);
+  });
+  if (hit) {
+    const y = hit.years == null ? (resumeSkillYears(hit.name, ra) || 0) : Number(hit.years) || 0;
+    return y >= 5 ? 1 : y >= 3 ? 0.78 : y >= 1 ? 0.55 : 0.4; // listed with no paid experience: between beginner and intermediate
+  }
+  // A specific technology that isn't on the resume
+  const named = q.match(/(?:proficiency|experience|skills?|knowledge|expertise|familiarity|familiar|comfortable|confident|rate yourself|rate your|level)\s+(?:level\s+)?(?:in|with|of|using|on|at)\s+([a-z0-9+#. /-]{2,40}?)\s*(?:\?|$|on a scale|from|out of)/)?.[1];
+  if (named && !/^(this|the|our|these|your|general|overall|total)\b/.test(named.trim())) return 0;
+  return null;
+}
+
+const isSelfRating = (q) => /rate|rating|proficien|skill|level|expertise|experience|familiar|knowledge|confident|comfortable (with|using|in)|how (well|good)/.test(q);
 
 // Rough annual number from strings like "₹22,00,000 / year (22 LPA)" or "22 LPA"
 function salaryNumber(profile) {
@@ -86,6 +154,24 @@ function ruleAnswer({ question, type, options = [] }, profile) {
   if (/sponsor|visa/.test(q)) return profile.visaRequired === 'Yes' ? yes() : no();
   if (/authori[sz]ed|legally (able|permitted|eligible)|right to work|work permit|citizen/.test(q)) {
     return profile.workAuthorization === 'No' ? no() : yes();
+  }
+
+  // Scales (rating / Likert / proficiency...): self-ratings come from the resume
+  const levels = isChoice ? scaleLevels(options) : null;
+  if (levels && isSelfRating(q)) {
+    const level = skillLevel(question, profile);
+    if (level != null) return pickLevel(options, levels, level);
+  }
+  // "Rate yourself from 1 to 10 in X" typed into a number box
+  if ((type === 'number' || type === 'text') && /scale of|out of|rate (yourself|your)|rating|from 1 to|1\s*(-|to|–)\s*\d+/.test(q)) {
+    const max = Number(q.match(/(?:\b[01]\s*(?:-|to|–)\s*|out of\s*)(\d+)/)?.[1]) || 10;
+    const level = skillLevel(question, profile) ?? 0.6;
+    return String(Math.max(1, Math.round(level * max)));
+  }
+  // True / False statements about the candidate's own setup
+  if (isChoice && options.length === 2 && options.every(o => /^(true|false)$/i.test(o.trim()))) {
+    if (/sponsor|visa/.test(q)) return pickOption(options, profile.visaRequired === 'Yes' ? 'True' : 'False');
+    if (/authori[sz]ed|right to work|willing|comfortable|available|able to|agree|consent/.test(q)) return pickOption(options, 'True');
   }
 
   // Experience — the analysed resume is the source of truth when available
@@ -202,11 +288,25 @@ async function llmAnswer({ question, type, options = [] }, profile, { mustAnswer
           + '(availability, comfort, willingness and consent questions: "Yes"; having a skill or credential not in the facts: "No"; numbers you cannot support: 0; '
           + 'text: a short honest answer grounded in the facts). Never return null. '
         : 'If the facts still do not support an answer, set "answer" to null. ')
-      + 'For multiple choice, "answer" must be exactly one of the options. For number fields return only digits. Keep text answers under 300 characters. '
-      + 'Reply with JSON: {"answer": string|null}.',
+      + 'Question formats: '
+      + 'Rating / proficiency / confidence scales about a skill: rate from the resume (skill not in the resume = lowest level; listed without paid work = beginner–intermediate; years of paid use = higher). '
+      + 'Likert agree–disagree statements: agree with statements about good work habits, learning, teamwork, and willingness that the facts do not contradict; disagree with statements that contradict the facts. '
+      + 'Frequency scales: answer how often for good professional practice (Often / Usually), unless the facts say otherwise. Importance scales: answer as a motivated candidate for this role would. '
+      + 'True/False: judge the statement against the facts. Either/Or and preferred-option questions: pick what fits the candidate\'s profile and target role. '
+      + 'Best / most appropriate answer (situational judgement): pick the most professional, ethical and collaborative response. LEAST appropriate answer: pick the least professional / most harmful response, since that is what is asked. '
+      + 'Knowledge questions with a correct answer (e.g. a technical MCQ): pick the correct option. '
+      + (type === 'multi'
+        ? 'This is a select-all-that-apply question: "answer" must be an ARRAY of every option that is true for the candidate (exact option text); if none apply use the "None" option when offered. '
+        : 'For multiple choice, "answer" must be exactly one of the options. ')
+      + 'For number fields return only digits. Keep text answers under 300 characters. '
+      + `Reply with JSON: {"answer": ${type === 'multi' ? 'string[]' : 'string'}|null}.`,
     `Candidate facts: ${JSON.stringify(facts)}\nQuestion: ${question}\nField type: ${type}${options.length ? `\nOptions: ${JSON.stringify(options)}` : ''}`
   );
   const answer = out?.answer;
+  if (type === 'multi') {
+    const picked = [...new Set((Array.isArray(answer) ? answer : answer != null ? [answer] : []).map(a => pickOption(options, String(a))).filter(Boolean))];
+    return picked.length ? picked : null;
+  }
   if (answer == null || answer === '') return null;
   if (options.length) return pickOption(options, String(answer));
   if (type === 'number') return digits(answer) || null;
@@ -217,8 +317,14 @@ async function llmAnswer({ question, type, options = [] }, profile, { mustAnswer
 // choices -> "Yes" if offered, else the first option; experience numbers -> 0 (truthful
 // for a skill not on the profile). Free-text stays unanswered (needs review).
 function forcedAnswer({ question, type, options = [] }, profile) {
+  if (type === 'multi' && options.length) {
+    const none = pickOption(options, 'None of the above', 'None', 'Not applicable');
+    return [none || options[0]];
+  }
   if (options.length) {
-    return pickOption(options, 'Yes') || options.find(o => !/^select|^choose|^--/i.test(o.trim())) || options[0];
+    const levels = scaleLevels(options);
+    if (levels) return pickLevel(options, levels, 0.62); // a scale: modest, positive middle
+    return pickOption(options, 'Yes', 'True', 'I agree', 'Agree') || options.find(o => !/^select|^choose|^--/i.test(o.trim())) || options[0];
   }
   if (type === 'number') {
     return /year|experience/i.test(question) ? '0' : (String(profile.experienceYears ?? '') || '0');
@@ -240,14 +346,26 @@ export async function answerQuestion(field, profile, { force = false } = {}) {
   let result = null;
   const isChoice = field.type === 'select' || field.type === 'radio';
 
+  // Select-all-that-apply: languages and skills come straight from the resume
+  if (field.type === 'multi') {
+    const q = norm(field.question);
+    const ra = profile.resumeAnalysis || {};
+    const known = [...(ra.skills || []).map(sk => sk.name), ...(profile.skills || []), ...(ra.languages || []), ...(/language/.test(q) ? ['English'] : [])]
+      .map(norm).filter(n => n.length >= 2);
+    const matches = (field.options || []).filter(o => known.some(k => norm(o) === k || new RegExp(`(^|[^a-z0-9+#])${reSafe(k)}($|[^a-z0-9+#])`).test(norm(o))));
+    if (matches.length && /language|skill|technolog|tool|framework|experience|worked with|familiar|proficien|following/.test(q)) {
+      result = { answer: matches, source: 'rules' };
+    }
+  }
+
   // 1. The user's own saved answer for this kind of question
-  const saved = isChoice ? null : savedAnswerFor(field.question, profile.screeningAnswers);
+  const saved = isChoice || field.type === 'multi' ? null : savedAnswerFor(field.question, profile.screeningAnswers);
   if (saved) {
     const value = field.type === 'number' ? digits(saved.value) : saved.value;
     if (value) result = { answer: value, source: 'profile' };
   }
   // 2. Rules from profile facts
-  if (!result) {
+  if (!result && field.type !== 'multi') {
     const answer = ruleAnswer(field, profile);
     if (answer != null) result = { answer, source: 'rules' };
   }
