@@ -64,6 +64,9 @@ export async function discardEasyApply(page) {
 async function readFields(dialog) {
   return dialog.evaluate((d) => {
     const clean = (s = '') => s.replace(/\s+/g, ' ').replace(/\*\s*$/, '').replace(/\s*required\s*$/i, '').trim();
+    // Lines that are never the question itself
+    const NOISE = /^(this field is required\.?|please (make a selection|enter|select)[^]*|required|select an option|\d+\s*\/\s*\d+.*|\d+%|optional)$/i;
+    const visible = (el) => !!(el.offsetParent || el.getClientRects().length);
     const rawLabelOf = (el) => {
       const id = el.id;
       const byFor = id && d.querySelector(`label[for="${CSS.escape(id)}"]`);
@@ -76,55 +79,155 @@ async function readFields(dialog) {
       let node = el;
       for (let i = 0; i < 4 && node.parentElement && node.parentElement !== d; i++) {
         node = node.parentElement;
-        const line = (node.innerText || '').split('\n').map(s => s.trim()).find(s => s && s !== el.value && s.length < 160);
+        const line = (node.innerText || '').split('\n').map(s => s.trim()).find(s => s && s !== el.value && s.length < 160 && !NOISE.test(s));
         if (line) return line;
       }
       return (el.name || el.id || '').replace(/[-_]+/g, ' ').replace(/\d+/g, '').trim();
     };
     const isRequired = (el, raw) => el.required || el.getAttribute('aria-required') === 'true' || /\*\s*$/.test(raw.trim());
+    // The deepest element containing every node in the list
+    const commonAncestor = (nodes) => {
+      let a = nodes[0].parentElement;
+      while (a && a !== d && !nodes.every(n => a.contains(n))) a = a.parentElement;
+      return a || d;
+    };
+    // Text of one choice (radio/checkbox): its <label>, aria-label, or the wrapper that holds only this choice
+    const choiceText = (el, group) => {
+      const viaLabels = el.labels && Array.from(el.labels).map(l => l.innerText || l.textContent).join(' ').trim();
+      const lb = el.getAttribute('aria-labelledby');
+      const byLb = lb && lb.split(' ').map(x => document.getElementById(x)?.innerText).filter(Boolean).join(' ');
+      let t = viaLabels || el.getAttribute('aria-label') || byLb || '';
+      if (!t.trim()) {
+        let node = el;
+        while (node.parentElement && node.parentElement !== d && group.filter(g => node.parentElement.contains(g)).length === 1) {
+          node = node.parentElement;
+          if ((node.innerText || '').trim()) break;
+        }
+        t = node.innerText || node.textContent || '';
+      }
+      if (!t.trim() && el.value && !/^(on|true|false|\d+)$/i.test(el.value)) t = el.value;
+      // Drop drawn radio/check glyphs and bullets in front of the text
+      return clean((t.split('\n').map(x => x.replace(/^[^\p{L}\p{N}]+/u, '').trim()).filter(Boolean)[0]) || '');
+    };
+    // The question for a group of choices: legend / group label, else the closest text above the options
+    const groupQuestion = (els, optionTexts) => {
+      const fs = els[0].closest('fieldset');
+      const group = els[0].closest('[role="radiogroup"], [role="group"]');
+      const lb = (group || fs)?.getAttribute('aria-labelledby');
+      const byLb = lb && lb.split(' ').map(x => document.getElementById(x)?.innerText).filter(Boolean).join(' ');
+      const named = fs?.querySelector('legend')?.innerText || byLb || (group || fs)?.getAttribute('aria-label') || '';
+      if (clean(named) && !optionTexts.includes(clean(named))) return { text: named, raw: named };
+      let node = commonAncestor(els);
+      for (let i = 0; i < 6 && node && node !== d.parentElement; i++) {
+        const line = (node.innerText || '').split('\n').map(x => x.replace(/^[^\p{L}\p{N}]+/u, '').trim())
+          .find(x => x.length > 1 && !NOISE.test(x) && !optionTexts.includes(clean(x)));
+        if (line) return { text: line, raw: line };
+        node = node.parentElement;
+      }
+      return { text: '', raw: '' };
+    };
+
     const out = [];
     let idx = 0;
     const tag = (el) => { const k = `pg-f-${idx++}`; el.setAttribute('data-pg-field', k); return k; };
 
     // Text-like inputs, textareas, selects
-    for (const el of d.querySelectorAll('input:not([type]), input[type="text"], input[type="number"], input[type="tel"], input[type="email"], input[type="url"], textarea, select')) {
-      if (el.offsetParent === null || el.disabled) continue;
+    for (const el of d.querySelectorAll('input:not([type]), input[type="text"], input[type="number"], input[type="tel"], input[type="email"], input[type="url"], input[type="date"], textarea, select')) {
+      if (!visible(el) || el.disabled || el.readOnly) continue;
       const raw = rawLabelOf(el);
       const base = { key: tag(el), question: clean(raw), required: isRequired(el, raw) };
       if (el.tagName === 'SELECT') {
-        const options = Array.from(el.options).map(o => o.text.trim()).filter(t => t && !/^select an option$/i.test(t));
+        const options = Array.from(el.options).map(o => o.text.trim()).filter(t => t && !/^(select an option|select|choose.*|--.*)$/i.test(t));
         const selected = el.options[el.selectedIndex]?.text?.trim() || '';
-        out.push({ ...base, type: 'select', options, empty: !el.value || /^select an option$/i.test(selected) });
+        out.push({ ...base, type: 'select', options, empty: !el.value || /^(select an option|select|choose.*|--.*)$/i.test(selected) });
       } else {
         // LinkedIn marks number-only text boxes with "numeric" in the id
         const numeric = el.type === 'number' || /numeric/i.test(el.id || '') || el.inputMode === 'numeric' || el.inputMode === 'decimal';
-        const type = el.tagName === 'TEXTAREA' ? 'textarea' : (numeric ? 'number' : 'text');
-        out.push({ ...base, type, empty: !el.value, combobox: el.getAttribute('role') === 'combobox' });
+        const type = el.tagName === 'TEXTAREA' ? 'textarea' : (el.type === 'date' ? 'date' : (numeric ? 'number' : 'text'));
+        out.push({ ...base, type, empty: !el.value.trim(), combobox: el.getAttribute('role') === 'combobox' || el.getAttribute('aria-autocomplete') === 'list' });
       }
     }
 
-    // Radio groups (by name)
-    const radiosByName = {};
-    for (const r of d.querySelectorAll('input[type="radio"]')) (radiosByName[r.name || r.id] ||= []).push(r);
-    for (const [name, radios] of Object.entries(radiosByName)) {
-      const fs = radios[0].closest('fieldset');
-      const legend = fs?.querySelector('legend')?.innerText || fs?.getAttribute('aria-label') || '';
-      const options = radios.map(r => clean(rawLabelOf(r)) || r.value);
+    // Choice groups: native radios by name, custom [role=radio] by their radiogroup
+    const groups = new Map();
+    for (const r of d.querySelectorAll('input[type="radio"], [role="radio"]:not(input)')) {
+      if (r.matches('[role="radio"]') && r.querySelector('input[type="radio"]')) continue;
+      const k = r.tagName === 'INPUT' ? `n:${r.name || r.id}` : `g:${(r.closest('[role="radiogroup"]') || r.parentElement).dataset.pgGroup ||= String(idx++)}`;
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(r);
+    }
+    for (const els of groups.values()) {
+      if (!els.some(visible)) continue;
       const key = `pg-r-${idx++}`;
-      radios.forEach((r, i) => r.setAttribute('data-pg-field', `${key}-${i}`));
-      out.push({ key, type: 'radio', question: clean(legend) || name, options, required: true, empty: !radios.some(r => r.checked) });
+      const options = els.map((r, i) => choiceText(r, els) || `Option ${i + 1}`);
+      els.forEach((r, i) => {
+        r.setAttribute('data-pg-field', `${key}-${i}`);
+        r.labels?.[0]?.setAttribute('data-pg-label', `${key}-${i}`);
+      });
+      const q = groupQuestion(els, options);
+      const isOn = (r) => r.checked === true || r.getAttribute('aria-checked') === 'true';
+      out.push({ key, type: 'radio', question: clean(q.text), options, required: true, empty: !els.some(isOn) });
     }
 
-    // Checkboxes (consent / follow company)
-    for (const c of d.querySelectorAll('input[type="checkbox"]')) {
-      const raw = rawLabelOf(c);
-      out.push({ key: tag(c), type: 'checkbox', question: clean(raw), required: isRequired(c, raw), empty: !c.checked, checked: c.checked });
+    // Checkboxes: a lone box is consent / follow company; several boxes under one question are a multi-choice
+    const boxes = Array.from(d.querySelectorAll('input[type="checkbox"]')).filter(c => visible(c) || visible(c.parentElement));
+    const byGroup = new Map();
+    for (const c of boxes) {
+      const g = c.closest('fieldset, [role="group"]') || (c.name && boxes.filter(o => o.name === c.name).length > 1 ? `name:${c.name}` : c);
+      if (!byGroup.has(g)) byGroup.set(g, []);
+      byGroup.get(g).push(c);
+    }
+    for (const els of byGroup.values()) {
+      if (els.length === 1) {
+        const c = els[0];
+        const raw = choiceText(c, els) || rawLabelOf(c);
+        const key = tag(c);
+        c.labels?.[0]?.setAttribute('data-pg-label', key);
+        out.push({ key, type: 'checkbox', question: clean(raw), required: isRequired(c, raw), empty: !c.checked, checked: c.checked });
+        continue;
+      }
+      const key = `pg-c-${idx++}`;
+      const options = els.map((c, i) => choiceText(c, els) || `Option ${i + 1}`);
+      els.forEach((c, i) => {
+        c.setAttribute('data-pg-field', `${key}-${i}`);
+        c.labels?.[0]?.setAttribute('data-pg-label', `${key}-${i}`);
+      });
+      const q = groupQuestion(els, options);
+      out.push({ key, type: 'checkbox-group', question: clean(q.text), options, required: true, empty: !els.some(c => c.checked) });
     }
     return out;
   }).catch(() => []);
 }
 
-async function fillStep(dialog, profile, onProgress) {
+// Selects a radio / checkbox and confirms it took: label click, then the input, then a DOM click
+async function clickChoice(dialog, key) {
+  const el = dialog.locator(`[data-pg-field="${key}"]`).first();
+  const isOn = () => el.evaluate(e => e.checked === true || e.getAttribute('aria-checked') === 'true').catch(() => false);
+  if (await isOn()) return true;
+  const label = dialog.locator(`[data-pg-label="${key}"]`).first();
+  if (await label.count().catch(() => 0)) {
+    await label.scrollIntoViewIfNeeded().catch(() => {});
+    await label.click({ timeout: 3000 }).catch(() => {});
+    if (await isOn()) return true;
+  }
+  await el.scrollIntoViewIfNeeded().catch(() => {});
+  await el.click({ force: true, timeout: 3000 }).catch(() => {});
+  if (await isOn()) return true;
+  await el.evaluate(e => e.click()).catch(() => {});
+  return isOn();
+}
+
+// Index of the option that matches an answer (exact, then prefix, then contains)
+function optionIndex(options, answer) {
+  const n = (s) => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const a = n(answer);
+  let i = options.findIndex(o => n(o) === a);
+  if (i < 0) i = options.findIndex(o => n(o).startsWith(a) || (a && a.startsWith(n(o)) && n(o).length > 1));
+  if (i < 0 && a.length > 2) i = options.findIndex(o => n(o).includes(a) || a.includes(n(o)));
+  return i;
+}
+
+async function fillStep(dialog, profile, onProgress, { forceAll = false } = {}) {
   let answered = 0;
   const unanswered = [];
 
@@ -149,16 +252,16 @@ async function fillStep(dialog, profile, onProgress) {
     if (!f.empty) continue;
 
     if (f.type === 'checkbox') {
-      if (f.required) {
-        await dialog.locator(`[data-pg-field="${f.key}"]`).check({ force: true }).catch(() => {});
-        answered++;
+      // Required boxes (terms, consent, "I confirm...") get ticked
+      if (f.required || forceAll || /agree|consent|confirm|acknowledge|certify|terms|privacy/i.test(f.question)) {
+        if (await clickChoice(dialog, f.key)) answered++;
       }
       continue;
     }
 
     // Resume radio list: pick the first saved resume
     if (f.type === 'radio' && f.options.length && f.options.every(o => /\.(pdf|docx?)$/i.test(o))) {
-      await dialog.locator(`[data-pg-field="${f.key}-0"]`).check({ force: true }).catch(() => {});
+      await clickChoice(dialog, `${f.key}-0`);
       continue;
     }
 
@@ -173,15 +276,16 @@ async function fillStep(dialog, profile, onProgress) {
       }
     }
 
-    // Never guess an answer for a field we can't identify
+    // A field we can't identify: choices still get a safe pick when required, text is skipped
     if (!f.question || f.question.length < 3) {
-      if (f.required) unanswered.push('A required field without a label');
-      continue;
+      if (!(f.required || forceAll)) continue;
+      if (!f.options?.length) { unanswered.push('A required field without a label'); continue; }
     }
 
     // LinkedIn uses plain text inputs for numeric answers
     const fieldType = f.type === 'text' && /how many|years|experience|number of|ctc|salary|notice period/i.test(f.question) ? 'number' : f.type;
-    const result = await answerQuestion({ question: f.question, type: fieldType, options: f.options || [] }, profile, { force: f.required });
+    const askType = f.type === 'checkbox-group' ? 'radio' : fieldType;
+    const result = await answerQuestion({ question: f.question || 'Select one option', type: askType, options: f.options || [] }, profile, { force: f.required || forceAll });
     if (!result) {
       if (f.required) unanswered.push(f.question || 'Unlabelled question');
       continue;
@@ -189,10 +293,17 @@ async function fillStep(dialog, profile, onProgress) {
     const { answer, source } = result;
 
     if (f.type === 'select') {
-      await dialog.locator(`[data-pg-field="${f.key}"]`).selectOption({ label: answer }).catch(() => {});
-    } else if (f.type === 'radio') {
-      const i = Math.max(0, f.options.indexOf(answer));
-      await dialog.locator(`[data-pg-field="${f.key}-${i}"]`).check({ force: true }).catch(() => {});
+      const i = optionIndex(f.options, answer);
+      await dialog.locator(`[data-pg-field="${f.key}"]`).selectOption({ label: f.options[Math.max(0, i)] }).catch(() => {});
+    } else if (f.type === 'radio' || f.type === 'checkbox-group') {
+      let i = optionIndex(f.options, answer);
+      if (i < 0) i = Math.max(0, optionIndex(f.options, 'Yes'));
+      if (!(await clickChoice(dialog, `${f.key}-${i}`))) {
+        unanswered.push(f.question || 'A choice question');
+        continue;
+      }
+    } else if (f.type === 'date') {
+      await dialog.locator(`[data-pg-field="${f.key}"]`).fill(new Date().toISOString().slice(0, 10)).catch(() => {});
     } else {
       const input = dialog.locator(`[data-pg-field="${f.key}"]`);
       // Number boxes reject "5 years": keep just the number
@@ -249,8 +360,14 @@ async function repairInvalid(dialog, profile, onProgress) {
 }
 
 async function visibleErrors(dialog) {
-  return dialog.evaluate(d => Array.from(d.querySelectorAll('[role="alert"], .artdeco-inline-feedback--error'))
-    .filter(e => e.offsetParent !== null).map(e => e.innerText.trim()).filter(t => t && t.length < 200)).catch(() => []);
+  return dialog.evaluate(d => {
+    const shown = (e) => !!(e.offsetParent || e.getClientRects().length);
+    const byRole = Array.from(d.querySelectorAll('[role="alert"], .artdeco-inline-feedback--error')).filter(shown).map(e => e.innerText.trim());
+    // New layout: plain red text under the question
+    const byText = Array.from(d.querySelectorAll('span, div, p')).filter(e => !e.children.length && shown(e)
+      && /^(this field is required|please (make a selection|enter|select)|enter a (valid|whole|decimal)|invalid)/i.test(e.innerText.trim())).map(e => e.innerText.trim());
+    return [...new Set([...byRole, ...byText])].filter(t => t && t.length < 200);
+  }).catch(() => []);
 }
 
 export async function applyToJobWithPlaywright(page, job, profile, options = {}, onProgress = () => {}) {
@@ -294,17 +411,19 @@ export async function applyToJobWithPlaywright(page, job, profile, options = {},
       sameStepCount = progress && progress === lastProgress ? sameStepCount + 1 : 0;
       lastProgress = progress;
       if (sameStepCount >= 1) {
-        // Didn't advance: LinkedIn rejected something. Try to repair once, then give up.
-        const { fixed, firstMessage } = await repairInvalid(dialog, profile, onProgress);
-        if (fixed && sameStepCount < 2) {
+        // Didn't advance: LinkedIn rejected or still wants something. Fix number answers and
+        // answer every empty field (required or not), then try again — up to 3 times.
+        await repairInvalid(dialog, profile, onProgress);
+        if (sameStepCount <= 3) {
+          const { answered } = await fillStep(dialog, profile, onProgress, { forceAll: true });
+          const errs = await visibleErrors(dialog);
+          onProgress({ type: 'llm', tag: 'RETRY STEP', message: `${job.company}: step ${progress} didn't move on${errs[0] ? ` ("${errs[0]}")` : ''} — answered ${answered} more field${answered === 1 ? '' : 's'}, trying again.` });
           await clickButton(dialog, /^(Next|Review|Continue)/i);
           await randomSleep(1800, 2600);
           continue;
         }
-      }
-      if (sameStepCount >= 2) {
-        const errs = await invalidInputs(dialog);
-        onProgress({ type: 'warn', tag: 'NEEDS REVIEW', message: `${job.company}: stuck on a step${errs[0] ? ` ("${errs[0].message}")` : ''}. Added to Needs review.` });
+        const errs = await visibleErrors(dialog);
+        onProgress({ type: 'warn', tag: 'NEEDS REVIEW', message: `${job.company}: stuck on step ${progress}${errs[0] ? ` ("${errs[0]}")` : ''}. Added to Needs review.` });
         await discardEasyApply(page);
         return { success: false, reason: 'custom_screening_questions_needs_review' };
       }
@@ -357,9 +476,8 @@ export async function applyToJobWithPlaywright(page, job, profile, options = {},
       const { answered, unanswered } = await fillStep(dialog, profile, onProgress);
       if (answered) onProgress({ type: 'llm', tag: `STEP ${progress || step}`, message: `Filled ${answered} field${answered === 1 ? '' : 's'} for ${job.company}.` });
       if (unanswered.length) {
-        onProgress({ type: 'warn', tag: 'NEEDS REVIEW', message: `${job.company} asks something Penguin can't answer from your profile: "${unanswered.slice(0, 2).join('", "')}". Added to Needs review.` });
-        await discardEasyApply(page);
-        return { success: false, reason: 'custom_screening_questions_needs_review', questions: unanswered };
+        // Try to move on anyway; if LinkedIn refuses, the retry above answers everything it can
+        onProgress({ type: 'warn', tag: 'UNSURE', message: `${job.company}: couldn't fill "${unanswered.slice(0, 2).join('", "').slice(0, 120)}" — trying to continue.` });
       }
 
       const moved = await clickButton(dialog, /^(Next|Review|Continue)/i);
@@ -379,3 +497,5 @@ export async function applyToJobWithPlaywright(page, job, profile, options = {},
     return { success: false, reason: 'unconfirmed', error: err.message };
   }
 }
+// For local form tests only
+export const __test = { readFields, fillStep, clickChoice };

@@ -199,12 +199,14 @@ function selectedPlatforms() {
 const ADAPTERS = {
   linkedin: {
     // Public job feed (stable markup) fetched from inside the user's LinkedIn tab
-    scrape: async (page, role, location, max) => {
+    // round 0 reads the first `max` results, round 1 the next `max`, and so on
+    scrape: async (page, role, location, max, round = 0) => {
       if (!/linkedin\.com/.test(page.url())) {
         await page.goto('https://www.linkedin.com/jobs/', { waitUntil: 'domcontentloaded', timeout: 25000 }).catch(() => {});
       }
       const found = [];
-      for (let start = 0; start < max && start < 100; start += 10) {
+      const first = round * max;
+      for (let start = first; start < first + max && start < 1000; start += 10) {
         const batch = await fetchGuestJobs(page, { keywords: role, location: (location || '').split(/[,(/]/)[0].trim(), start });
         if (!batch.length) break;
         for (const j of batch) {
@@ -419,11 +421,7 @@ async function runAutonomousLoop() {
       return;
     }
 
-    // Split the cap evenly across platform × role slots
-    const slots = plan.length * targetRoles.length;
-    const baseQuota = Math.floor(totalMax / slots);
-    let extra = totalMax % slots;
-    addLog('cdp', 'RUN PLAN', `Applying on ${plan.map(k => PLATFORMS[k].label).join(', ')} for ${targetRoles.map(r => `"${r}"`).join(', ')}. Cap: ${totalMax} applications.`);
+    addLog('cdp', 'RUN PLAN', `Applying on ${plan.map(k => PLATFORMS[k].label).join(', ')} for ${targetRoles.map(r => `"${r}"`).join(', ')}. Target: ${totalMax} applications — Penguin keeps searching until it gets there or you press Stop.`);
 
     let totalApplied = 0;
     const emitProgress = (platform, role) => broadcastEvent('runProgress', {
@@ -509,62 +507,84 @@ async function runAutonomousLoop() {
       return { stop, applied: appliedForSlot };
     };
 
-    platformLoop:
-    for (const key of plan) {
-      const adapter = ADAPTERS[key];
-      for (const role of targetRoles) {
-        while (agentState === 'paused') await sleep(1000);
-        if (agentState !== 'running' || totalApplied >= totalMax) break platformLoop;
+    // Keep searching deeper result pages (round 0, 1, 2...) for every platform × role
+    // until the target is reached, the user stops, or no platform has new listings.
+    const seenIds = new Set(jobs.filter(j => j.status === 'applied' || j.status === 'needs_review').map(j => String(j.id)));
+    const exhausted = new Set(); // "platform|role" slots with no new listings left
+    const BATCH = 25;
+    let round = 0;
 
-        const page = findPlatformPage(browser, key);
-        if (!page) {
-          addLog('warn', 'PLATFORM TAB CLOSED', `${PLATFORMS[key].label} tab was closed. Moving to the next platform.`);
-          continue platformLoop;
-        }
-        await page.bringToFront().catch(() => {});
+    runLoop:
+    while (totalApplied < totalMax && agentState !== 'idle' && agentState !== 'completed') {
+      let activeSlots = 0;
+      for (const key of plan) {
+        const adapter = ADAPTERS[key];
+        for (const role of targetRoles) {
+          while (agentState === 'paused') await sleep(1000);
+          if (agentState !== 'running' || totalApplied >= totalMax) break runLoop;
+          const slot = `${key}|${role}`;
+          if (exhausted.has(slot)) continue;
+          activeSlots++;
 
-        const quota = baseQuota + (extra > 0 ? 1 : 0);
-        if (extra > 0) extra--;
-        if (quota === 0) continue;
-
-        emitProgress(key, role);
-        addLog('scrape', 'SEARCH', `[${PLATFORMS[key].label}] Searching "${role}" (target ${quota})...`);
-
-        let scraped = [];
-        try {
-          scraped = await adapter.scrape(page, role, config.location, Math.max(quota * 2, 20));
-        } catch (err) {
-          if (err.reason === 'login_required' || err.reason === 'verification_required') {
-            addLog('warn', 'ACTION REQUIRED', err.reason === 'login_required'
-              ? `[${PLATFORMS[key].label}] Please sign in to ${PLATFORMS[key].label} in Chrome, then run again. Skipping ${PLATFORMS[key].label} for now.`
-              : `[${PLATFORMS[key].label}] ${PLATFORMS[key].label} blocked automated access or is showing a security check. Open its tab, make sure pages load normally, then run again. Skipping ${PLATFORMS[key].label} for now.`);
-            continue platformLoop;
+          const page = findPlatformPage(browser, key);
+          if (!page) {
+            addLog('warn', 'PLATFORM TAB CLOSED', `${PLATFORMS[key].label} tab was closed. Skipping it — reopen it to include it again.`);
+            targetRoles.forEach(r => exhausted.add(`${key}|${r}`));
+            continue;
           }
-          addLog('warn', 'SEARCH FAILED', `[${PLATFORMS[key].label}] ${err.message}`);
-          continue;
-        }
-        addLog('scrape', 'FOUND LISTINGS', `[${PLATFORMS[key].label}] Found ${scraped.length} listings for "${role}".`);
-        if (scraped.length === 0) continue;
+          await page.bringToFront().catch(() => {});
+          emitProgress(key, role);
+          addLog('scrape', 'SEARCH', `[${PLATFORMS[key].label}] Searching "${role}"${round ? ` (results page ${round + 1})` : ''} — ${totalApplied}/${totalMax} applied so far...`);
 
-        const evaluated = await filterJobsWithLLM(scraped, candidateProfile, config.minMatchScore, role);
-        evaluated.forEach(j => { j.targetRole = role; j.platform = key; });
-        for (const ej of evaluated) {
-          if (!jobs.find(j => String(j.id) === String(ej.id))) jobs.push(ej);
-        }
-        broadcastEvent('jobs', jobs);
+          let scraped = [];
+          try {
+            scraped = await adapter.scrape(page, role, config.location, BATCH, round);
+          } catch (err) {
+            if (err.reason === 'login_required' || err.reason === 'verification_required') {
+              addLog('warn', 'ACTION REQUIRED', err.reason === 'login_required'
+                ? `[${PLATFORMS[key].label}] Please sign in to ${PLATFORMS[key].label} in Chrome. Skipping ${PLATFORMS[key].label} for now.`
+                : `[${PLATFORMS[key].label}] ${PLATFORMS[key].label} is showing a security check. Open its tab, make sure pages load normally. Skipping ${PLATFORMS[key].label} for now.`);
+              targetRoles.forEach(r => exhausted.add(`${key}|${r}`));
+              continue;
+            }
+            addLog('warn', 'SEARCH FAILED', `[${PLATFORMS[key].label}] ${err.message}`);
+            exhausted.add(slot);
+            continue;
+          }
+          const fresh = scraped.filter(j => !seenIds.has(String(j.id)));
+          fresh.forEach(j => seenIds.add(String(j.id)));
+          addLog('scrape', 'FOUND LISTINGS', `[${PLATFORMS[key].label}] ${fresh.length} new listings for "${role}".`);
+          if (fresh.length === 0) {
+            exhausted.add(slot);
+            addLog('scrape', 'NO MORE LISTINGS', `[${PLATFORMS[key].label}] No more new listings for "${role}".`);
+            continue;
+          }
 
-        let shortlist = evaluated.filter(j => j.status === 'shortlisted');
-        if (shortlist.length === 0) {
-          // Nothing cleared the bar: still try the best few matches rather than applying to nothing
-          shortlist = [...evaluated].sort((a, b) => (b.matchScore || 0) - (a.matchScore || 0)).slice(0, quota);
-          shortlist.forEach(j => { j.status = 'shortlisted'; });
-          addLog('llm', 'BEST MATCHES', `[${PLATFORMS[key].label}] No listing met the ${config.minMatchScore}% bar for "${role}", so trying the ${shortlist.length} closest matches.`);
-        }
-        addLog('llm', 'SHORTLIST READY', `[${PLATFORMS[key].label}] ${shortlist.length} good matches for "${role}".`);
+          const evaluated = await filterJobsWithLLM(fresh, candidateProfile, config.minMatchScore, role);
+          evaluated.forEach(j => { j.targetRole = role; j.platform = key; });
+          for (const ej of evaluated) {
+            if (!jobs.find(j => String(j.id) === String(ej.id))) jobs.push(ej);
+          }
+          broadcastEvent('jobs', jobs);
 
-        const outcome = await applyInParallel(key, role, shortlist, quota);
-        if (outcome.stop) break platformLoop;
+          let shortlist = evaluated.filter(j => j.status === 'shortlisted');
+          if (shortlist.length === 0) {
+            // Nothing cleared the bar: still try the closest matches rather than applying to nothing
+            shortlist = [...evaluated].sort((a, b) => (b.matchScore || 0) - (a.matchScore || 0)).slice(0, Math.ceil(evaluated.length / 2));
+            shortlist.forEach(j => { j.status = 'shortlisted'; });
+            addLog('llm', 'BEST MATCHES', `[${PLATFORMS[key].label}] No listing met the ${config.minMatchScore}% bar for "${role}", so trying the ${shortlist.length} closest matches.`);
+          }
+          addLog('llm', 'SHORTLIST READY', `[${PLATFORMS[key].label}] ${shortlist.length} matches for "${role}".`);
+
+          const outcome = await applyInParallel(key, role, shortlist, totalMax - totalApplied);
+          if (outcome.stop) break runLoop;
+        }
       }
+      if (activeSlots === 0) {
+        if (agentState === 'running') addLog('warn', 'OUT OF LISTINGS', `Penguin went through every listing it could find and applied to ${totalApplied} of ${totalMax}. Add more target roles or widen the location to find more.`);
+        break;
+      }
+      round++;
     }
 
     if (agentState === 'running') {

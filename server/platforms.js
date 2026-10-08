@@ -98,13 +98,15 @@ const slugify = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|
 
 /* ============================== NAUKRI ============================== */
 
-export async function scrapeNaukriJobs(page, query, location, maxJobs = 40) {
+// round: 0 for the first results pages, 1 for the pages after those, and so on
+export async function scrapeNaukriJobs(page, query, location, maxJobs = 40, round = 0) {
   const city = primaryCity(location);
   const results = [];
   const seen = new Set();
   const maxPages = Math.max(1, Math.ceil(maxJobs / 20));
+  const firstPage = 1 + round * maxPages;
 
-  for (let pageNum = 1; pageNum <= maxPages && results.length < maxJobs; pageNum++) {
+  for (let pageNum = firstPage; pageNum < firstPage + maxPages && results.length < maxJobs; pageNum++) {
     if (page.isClosed()) break;
     const pathSlug = `${slugify(query)}-jobs${city ? `-in-${slugify(city)}` : ''}${pageNum > 1 ? `-${pageNum}` : ''}`;
     const url = `https://www.naukri.com/${pathSlug}?k=${encodeURIComponent(query)}${city ? `&l=${encodeURIComponent(city)}` : ''}`;
@@ -238,14 +240,15 @@ async function indeedBlocked(page) {
   return blockedReason(page);
 }
 
-export async function scrapeIndeedJobs(page, query, location, maxJobs = 40) {
+export async function scrapeIndeedJobs(page, query, location, maxJobs = 40, round = 0) {
   const origin = indeedOrigin(page);
   const city = primaryCity(location);
   const results = [];
   const seen = new Set();
   const maxPages = Math.max(1, Math.ceil(maxJobs / 15));
+  const firstPage = round * maxPages;
 
-  for (let pageNum = 0; pageNum < maxPages && results.length < maxJobs; pageNum++) {
+  for (let pageNum = firstPage; pageNum < firstPage + maxPages && results.length < maxJobs; pageNum++) {
     if (page.isClosed()) break;
     // sc=0kf:attr(DSQF7); is Indeed's "Easily apply" filter
     const url = `${origin}/jobs?q=${encodeURIComponent(query)}&l=${encodeURIComponent(city)}&sc=0kf%3Aattr%28DSQF7%29%3B&sort=date&start=${pageNum * 10}`;

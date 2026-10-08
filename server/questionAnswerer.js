@@ -22,7 +22,10 @@ const digits = (s = '') => String(s).replace(/[^0-9]/g, '');
 
 function pickOption(options, ...wanted) {
   for (const w of wanted) {
-    const hit = options.find(o => norm(o) === norm(w)) || options.find(o => norm(o).startsWith(norm(w)));
+    const n = norm(w);
+    if (!n) continue;
+    const hit = options.find(o => norm(o) === n) || options.find(o => norm(o).startsWith(n))
+      || (n.length > 3 ? options.find(o => norm(o).includes(n) || n.includes(norm(o))) : null);
     if (hit) return hit;
   }
   return null;
@@ -164,7 +167,7 @@ function ruleAnswer({ question, type, options = [] }, profile) {
   return null;
 }
 
-async function llmAnswer({ question, type, options = [] }, profile) {
+async function llmAnswer({ question, type, options = [] }, profile, { mustAnswer = false } = {}) {
   if (!hasLLM()) return null;
   const facts = {
     name: profile.name, headline: profile.headline, location: profile.location, experienceYears: profile.experienceYears,
@@ -194,7 +197,11 @@ async function llmAnswer({ question, type, options = [] }, profile) {
       + 'Yes/No questions asking whether the candidate has something (a certification, a skill, a clearance) that is NOT in the facts: answer "No". '
       + 'Numeric questions about years of experience with a skill: if the skill is listed, or is a basic part of a listed skill (e.g. JavaScript, HTML and CSS for React; SQL for backend work), answer with experienceYears; if it is unrelated to the facts, answer null. '
       + 'Open-ended questions (motivation, summary, cover note): reuse or adapt the candidate\'s savedAnswers when relevant; otherwise write 2-3 sincere sentences grounded in the headline and skills, no made-up specifics. '
-      + 'If the facts still do not support an answer, set "answer" to null. '
+      + (mustAnswer
+        ? 'This question is REQUIRED and the form cannot be sent without it, so you must give an answer: choose the most reasonable truthful option '
+          + '(availability, comfort, willingness and consent questions: "Yes"; having a skill or credential not in the facts: "No"; numbers you cannot support: 0; '
+          + 'text: a short honest answer grounded in the facts). Never return null. '
+        : 'If the facts still do not support an answer, set "answer" to null. ')
       + 'For multiple choice, "answer" must be exactly one of the options. For number fields return only digits. Keep text answers under 300 characters. '
       + 'Reply with JSON: {"answer": string|null}.',
     `Candidate facts: ${JSON.stringify(facts)}\nQuestion: ${question}\nField type: ${type}${options.length ? `\nOptions: ${JSON.stringify(options)}` : ''}`
@@ -210,13 +217,14 @@ async function llmAnswer({ question, type, options = [] }, profile) {
 // choices -> "Yes" if offered, else the first option; experience numbers -> 0 (truthful
 // for a skill not on the profile). Free-text stays unanswered (needs review).
 function forcedAnswer({ question, type, options = [] }, profile) {
-  if ((type === 'select' || type === 'radio') && options.length) {
-    return pickOption(options, 'Yes') || options[0];
+  if (options.length) {
+    return pickOption(options, 'Yes') || options.find(o => !/^select|^choose|^--/i.test(o.trim())) || options[0];
   }
   if (type === 'number') {
     return /year|experience/i.test(question) ? '0' : (String(profile.experienceYears ?? '') || '0');
   }
-  return null;
+  // Free text: a short, truthful line from the profile rather than leaving it blank
+  return profile.resumeAnalysis?.summary || profile.headline || 'Please refer to my resume for details.';
 }
 
 /**
@@ -252,7 +260,12 @@ export async function answerQuestion(field, profile, { force = false } = {}) {
     cache.set(key, result);
     return result;
   }
-  // 4. Required field: auto-pick so the application can continue (not cached)
+  // 4. Required field: ask the AI again, this time insisting on an answer
+  if (force) {
+    const answer = await llmAnswer(field, profile, { mustAnswer: true }).catch(() => null);
+    if (answer != null) return { answer, source: 'ai' };
+  }
+  // 5. Last resort for required fields so the application can continue (not cached)
   if (force) {
     const answer = forcedAnswer(field, profile);
     if (answer != null) return { answer, source: 'auto-pick' };
