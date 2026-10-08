@@ -97,8 +97,12 @@ export async function fetchUserAppliedJobsFromSupabase(user) {
       .order('applied_at', { ascending: false });
 
     if (!error && data && data.length > 0) {
+      const traceOf = (raw) => { try { return raw ? JSON.parse(raw) : null; } catch { return null; } };
       // Map DB column names to the shape our UI expects
       return data.map(row => ({
+        // Needs review: why the agent left it for the user
+        reviewReason: row.status === 'needs_review' ? traceOf(row.playwright_trace)?.reviewReason || null : null,
+        reviewDetail: row.status === 'needs_review' ? traceOf(row.playwright_trace)?.reviewDetail || '' : '',
         id: row.job_id || row.id,
         title: row.title,
         company: row.company,
@@ -113,7 +117,7 @@ export async function fetchUserAppliedJobsFromSupabase(user) {
         pacing_delay_sec: row.pacing_delay_sec,
         llmReasoning: row.llm_reasoning ? { summary: row.llm_reasoning, decision: row.match_score >= 75 ? 'APPLY' : 'SKIP' } : null,
         llm_reasoning: row.llm_reasoning,
-        playwrightTrace: row.playwright_trace ? JSON.parse(row.playwright_trace) : null,
+        playwrightTrace: traceOf(row.playwright_trace),
         stepsCompleted: row.steps_completed,
         stepsTotal: row.steps_total,
         steps_completed: row.steps_completed,

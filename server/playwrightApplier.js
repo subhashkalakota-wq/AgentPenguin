@@ -68,18 +68,18 @@ async function waitForDialog(page, timeoutMs = 12000) {
 
 // What the form shows when Penguin can't move on: heading, buttons, and a screenshot
 async function describeStuck(page, dialog, company) {
-  const info = await dialog.evaluate(d => ({
+  const info = await dialog.evaluate((d) => ({
     heading: (d.querySelector('h1, h2, h3')?.innerText || '').trim().slice(0, 80),
     buttons: Array.from(d.querySelectorAll('button, [role="button"]'))
       .filter(b => b.offsetParent || b.getClientRects().length)
       .map(b => (b.innerText || b.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ')).filter(Boolean).slice(0, 8),
-  })).catch(() => ({ heading: '', buttons: [] }));
+  }), null, { timeout: 3000 }).catch(() => ({ heading: '', buttons: [] }));
   let shot = '';
   try {
     const dir = path.resolve('server/data/stuck');
     fs.mkdirSync(dir, { recursive: true });
     shot = path.join(dir, `${new Date().toISOString().replace(/[:.]/g, '-')}-${String(company).replace(/[^a-z0-9]+/gi, '_').slice(0, 40)}.png`);
-    await page.screenshot({ path: shot });
+    await page.screenshot({ path: shot, timeout: 5000 });
   } catch { shot = ''; }
   return `form "${info.heading || '?'}", buttons: [${info.buttons.join(' | ') || 'none'}]${shot ? `, screenshot ${path.relative(process.cwd(), shot)}` : ''}`;
 }
@@ -229,7 +229,7 @@ async function readFields(dialog) {
       });
       const q = groupQuestion(els, options);
       const isOn = (r) => r.checked === true || r.getAttribute('aria-checked') === 'true';
-      out.push({ key, type: 'radio', question: clean(q.text), options, required: true, empty: !els.some(isOn) });
+      out.push({ key, type: 'radio', question: clean(q.text), options, names: els.map(r => r.name || ''), context: clean((commonAncestor(els).innerText || '').slice(0, 300)), required: true, empty: !els.some(isOn) });
     }
 
     // Checkboxes: a lone box is consent / follow company; several boxes under one question are a multi-choice
@@ -246,7 +246,7 @@ async function readFields(dialog) {
         const raw = choiceText(c, els) || rawLabelOf(c);
         const key = tag(c);
         c.labels?.[0]?.setAttribute('data-pg-label', key);
-        out.push({ key, type: 'checkbox', question: clean(raw), required: isRequired(c, raw), empty: !c.checked, checked: c.checked });
+        out.push({ key, type: 'checkbox', question: clean(raw), name: c.name || '', required: isRequired(c, raw), empty: !c.checked, checked: c.checked });
         continue;
       }
       const key = `pg-c-${idx++}`;
@@ -256,27 +256,46 @@ async function readFields(dialog) {
         c.labels?.[0]?.setAttribute('data-pg-label', `${key}-${i}`);
       });
       const q = groupQuestion(els, options);
-      out.push({ key, type: 'checkbox-group', question: clean(q.text), options, required: true, empty: !els.some(c => c.checked) });
+      out.push({ key, type: 'checkbox-group', question: clean(q.text), options, names: els.map(c => c.name || ''), context: clean((commonAncestor(els).innerText || '').slice(0, 300)), required: true, empty: !els.some(c => c.checked) });
     }
     return out;
   }).catch(() => []);
 }
 
-// Selects a radio / checkbox and confirms it took: label click, then the input, then a DOM click
-async function clickChoice(dialog, key) {
-  const el = dialog.locator(`[data-pg-field="${key}"]`).first();
-  const isOn = () => el.evaluate(e => e.checked === true || e.getAttribute('aria-checked') === 'true').catch(() => false);
+// Runs in the page: finds a choice (re-finding it by input name + label text if LinkedIn
+// re-drew the question and our data-pg-field tag is gone), optionally clicks it, and
+// returns whether it is selected. Self-contained so Playwright can send it to the page.
+function choiceInPage(d, { key, name, label, click }) {
+  let el = d.querySelector(`[data-pg-field="${key}"]`);
+  if (!el && name) {
+    const textOf = (i) => (Array.from(i.labels || []).map(l => l.innerText).join(' ') || i.getAttribute('aria-label') || i.parentElement?.innerText || '').trim().toLowerCase();
+    const want = String(label || '').trim().toLowerCase();
+    el = Array.from(d.querySelectorAll('input')).find(i => i.name === name && want && textOf(i).includes(want)) || null;
+  }
+  if (el && click) el.click();
+  return !!el && (el.checked === true || el.getAttribute('aria-checked') === 'true');
+}
+
+/**
+ * Selects a radio / checkbox and confirms it took: label click, then the input, then a
+ * DOM click. Every step has a short time limit, so a re-drawn question can't stall the tab.
+ */
+async function clickChoice(dialog, key, hint = {}) {
+  const arg = { key, name: hint.name || '', label: hint.label || '' };
+  const isOn = () => dialog.evaluate(choiceInPage, { ...arg, click: false }, { timeout: 3000 }).catch(() => false);
+
   if (await isOn()) return true;
   const label = dialog.locator(`[data-pg-label="${key}"]`).first();
   if (await label.count().catch(() => 0)) {
-    await label.scrollIntoViewIfNeeded().catch(() => {});
     await label.click({ timeout: 3000 }).catch(() => {});
     if (await isOn()) return true;
   }
-  await el.scrollIntoViewIfNeeded().catch(() => {});
-  await el.click({ force: true, timeout: 3000 }).catch(() => {});
-  if (await isOn()) return true;
-  await el.evaluate(e => e.click()).catch(() => {});
+  const el = dialog.locator(`[data-pg-field="${key}"]`).first();
+  if (await el.count().catch(() => 0)) {
+    await el.click({ force: true, timeout: 3000 }).catch(() => {});
+    if (await isOn()) return true;
+  }
+  await dialog.evaluate(choiceInPage, { ...arg, click: true }, { timeout: 3000 }).catch(() => {});
   return isOn();
 }
 
@@ -309,7 +328,7 @@ async function fillStep(dialog, profile, onProgress, { forceAll = false } = {}) 
   for (const f of fields) {
     // Never auto-follow companies
     if (f.type === 'checkbox' && /follow/i.test(f.question)) {
-      if (f.checked) await dialog.locator(`[data-pg-field="${f.key}"]`).uncheck({ force: true }).catch(() => {});
+      if (f.checked) await dialog.locator(`[data-pg-field="${f.key}"]`).uncheck({ force: true, timeout: 3000 }).catch(() => {});
       continue;
     }
     if (!f.empty) continue;
@@ -317,14 +336,14 @@ async function fillStep(dialog, profile, onProgress, { forceAll = false } = {}) 
     if (f.type === 'checkbox') {
       // Required boxes (terms, consent, "I confirm...") get ticked
       if (f.required || forceAll || /agree|consent|confirm|acknowledge|certify|terms|privacy/i.test(f.question)) {
-        if (await clickChoice(dialog, f.key)) answered++;
+        if (await clickChoice(dialog, f.key, { name: f.name, label: f.question })) answered++;
       }
       continue;
     }
 
     // Resume radio list: pick the first saved resume
     if (f.type === 'radio' && f.options.length && f.options.every(o => /\.(pdf|docx?)$/i.test(o))) {
-      await clickChoice(dialog, `${f.key}-0`);
+      await clickChoice(dialog, `${f.key}-0`, { name: f.names?.[0], label: f.options[0] });
       continue;
     }
 
@@ -348,7 +367,11 @@ async function fillStep(dialog, profile, onProgress, { forceAll = false } = {}) 
     // LinkedIn uses plain text inputs for numeric answers
     const fieldType = f.type === 'text' && /how many|years|experience|number of|ctc|salary|notice period/i.test(f.question) ? 'number' : f.type;
     const askType = f.type === 'checkbox-group' ? 'multi' : (f.type === 'range' ? 'number' : fieldType);
-    const result = await answerQuestion({ question: f.question || 'Select one option', type: askType, options: f.options || [] }, profile, { force: f.required || forceAll });
+    // Identity questions (gender, race, veteran, disability) are sometimes read as one of their
+    // options; the text around the choices gives them away, so they're always declined
+    const selfId = /gender|\bsex\b|race\b|ethnic|hispanic|latin[oa]|veteran|disabilit|pronoun|sexual orientation/i.test(`${f.question} ${f.context || ''}`);
+    const asked = selfId && !/gender|race|ethnic|veteran|disabilit|hispanic|latin/i.test(f.question) ? `Self-identification (gender / race / veteran / disability): ${f.question}` : f.question;
+    const result = await answerQuestion({ question: asked || 'Select one option', type: askType, options: f.options || [] }, profile, { force: f.required || forceAll });
     if (!result) {
       if (f.required) unanswered.push(f.question || 'Unlabelled question');
       continue;
@@ -362,7 +385,7 @@ async function fillStep(dialog, profile, onProgress, { forceAll = false } = {}) 
       // Select all that apply: tick every chosen option
       const wanted = (Array.isArray(answer) ? answer : [answer]).map(a => optionIndex(f.options, a)).filter(i => i >= 0);
       let ticked = 0;
-      for (const i of (wanted.length ? [...new Set(wanted)] : [0])) if (await clickChoice(dialog, `${f.key}-${i}`)) ticked++;
+      for (const i of (wanted.length ? [...new Set(wanted)] : [0])) if (await clickChoice(dialog, `${f.key}-${i}`, { name: f.names?.[i], label: f.options[i] })) ticked++;
       if (!ticked) { unanswered.push(f.question || 'A multiple-choice question'); continue; }
     } else if (f.type === 'range') {
       // Slider: clamp to its range and fire the events a person's drag would
@@ -377,7 +400,7 @@ async function fillStep(dialog, profile, onProgress, { forceAll = false } = {}) 
     } else if (f.type === 'radio') {
       let i = optionIndex(f.options, answer);
       if (i < 0) i = Math.max(0, optionIndex(f.options, 'Yes'));
-      if (!(await clickChoice(dialog, `${f.key}-${i}`))) {
+      if (!(await clickChoice(dialog, `${f.key}-${i}`, { name: f.names?.[i], label: f.options[i] }))) {
         unanswered.push(f.question || 'A choice question');
         continue;
       }
@@ -449,31 +472,64 @@ async function visibleErrors(dialog) {
   }).catch(() => []);
 }
 
+// A human check (captcha / security verification) on the page or inside the form
+async function humanCheck(page, dialog = null) {
+  if (/\/checkpoint\/(challenge|lg)/.test(page.url())) return true;
+  const scope = dialog || page.locator('body');
+  return scope.evaluate((el) => {
+    if (el.querySelector('iframe[src*="captcha" i], iframe[title*="captcha" i], iframe[title*="challenge" i], iframe[src*="arkoselabs" i]')) return true;
+    return /verify (that )?you('|’)?re (a )?human|verify you are human|are you a robot|security verification|quick security check|complete the captcha/i.test((el.innerText || '').slice(0, 4000));
+  }, null, { timeout: 3000 }).catch(() => false);
+}
+
+// The Easy Apply form hands over to the employer's own site
+async function externalHandoff(dialog) {
+  return dialog.evaluate((d) => /continue to (the )?(company|employer)('s)? (site|website)|apply on (the )?(company|employer)('s)? (site|website)|complete your application on/i.test(d.innerText || ''), null, { timeout: 3000 }).catch(() => false);
+}
+
+/**
+ * Applies to one LinkedIn job. Never leaves a draft behind: anything not submitted is
+ * discarded. Results that need a person carry `reason` + a plain-English `detail`.
+ */
 export async function applyToJobWithPlaywright(page, job, profile, options = {}, onProgress = () => {}) {
   const { pacingDelaySec = 6 } = options;
   if (!page || page.isClosed()) return { success: false, reason: 'tab_closed' };
+  // No single page action may hang a tab: anything slower than this is treated as failed
+  page.setDefaultTimeout(10000);
+
+  const review = async (reason, detail, tag = 'NEEDS REVIEW') => {
+    onProgress({ type: 'warn', tag, message: `${job.company}: ${detail} Added to Needs review.` });
+    await discardEasyApply(page);
+    return { success: false, reason, detail };
+  };
 
   onProgress({ type: 'playwright', tag: 'OPEN JOB', message: `Opening ${job.company} — "${job.title}"` });
 
   try {
     const url = job.url || `https://www.linkedin.com/jobs/view/${job.id}/`;
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
-    await randomSleep(3000, 4500);
+    await randomSleep(2500, 3500);
     if (page.isClosed()) return { success: false, reason: 'tab_closed' };
-    if (/\/(login|authwall|checkpoint|signup)/.test(page.url())) return { success: false, reason: 'login_required' };
+    if (/\/(login|authwall|signup|uas\/login)/.test(page.url())) return { success: false, reason: 'login_required', detail: 'Signed out of LinkedIn.' };
+    if (await humanCheck(page)) return review('verification_required', 'LinkedIn is asking for a human verification check.', 'HUMAN CHECK');
 
+    // Easy Apply button can take a moment on a busy page
     const easyApply = page.locator('button[aria-label^="Easy Apply"], button[aria-label*="Easy Apply to"]').first();
-    if (!(await easyApply.isVisible().catch(() => false))) {
+    let canEasyApply = false;
+    for (let t = 0; t < 10 && !canEasyApply; t++) {
+      canEasyApply = await easyApply.isVisible().catch(() => false);
+      if (!canEasyApply) await randomSleep(400, 500);
+    }
+    if (!canEasyApply) {
       const applied = await page.getByText(/^Applied\b|Application submitted|You applied/i).first().isVisible().catch(() => false);
       if (applied) {
         onProgress({ type: 'success', tag: 'ALREADY APPLIED', message: `Already applied to ${job.company}. Skipping.` });
         return { success: false, reason: 'already_applied' };
       }
-      onProgress({ type: 'warn', tag: 'NO EASY APPLY', message: `${job.company} applies on its own website (no Easy Apply). Added to Needs review.` });
-      return { success: false, reason: 'external_apply' };
+      return review('external_apply', 'applies on the company website (no Easy Apply).', 'COMPANY WEBSITE');
     }
 
-    await easyApply.click();
+    await easyApply.click().catch(() => {});
     await randomSleep(1500, 2000);
 
     let lastProgress = '';
@@ -481,14 +537,16 @@ export async function applyToJobWithPlaywright(page, job, profile, options = {},
     for (let step = 1; step <= 15; step++) {
       if (page.isClosed()) return { success: false, reason: 'tab_closed' };
       const dialog = await waitForDialog(page);
-      // Let the step finish drawing before reading it
-      if (dialog) await waitForAction(dialog);
       if (!dialog) {
-        onProgress({ type: 'warn', tag: 'NO FORM', message: `Easy Apply form didn't open for ${job.company}. Added to Needs review.` });
-        return { success: false, reason: 'unconfirmed' };
+        if (await humanCheck(page)) return review('verification_required', 'LinkedIn is asking for a human verification check.', 'HUMAN CHECK');
+        return review('unconfirmed', "the Easy Apply form didn't open.", 'NO FORM');
       }
+      // Let the step finish drawing before reading it
+      await waitForAction(dialog);
+      if (await humanCheck(page, dialog)) return review('verification_required', 'the form is asking for a human verification check.', 'HUMAN CHECK');
+      if (await externalHandoff(dialog)) return review('external_apply', 'the application continues on the company website.', 'COMPANY WEBSITE');
 
-      const progress = await dialog.evaluate(d => (d.innerText.match(/\d+\s*\/\s*\d+\s*pages?|\d+%/) || [''])[0]).catch(() => '');
+      const progress = await dialog.evaluate(d => (d.innerText.match(/\d+\s*\/\s*\d+\s*pages?|\d+%/) || [''])[0], null, { timeout: 3000 }).catch(() => '');
       sameStepCount = progress && progress === lastProgress ? sameStepCount + 1 : 0;
       lastProgress = progress;
       if (sameStepCount >= 1) {
@@ -501,13 +559,12 @@ export async function applyToJobWithPlaywright(page, job, profile, options = {},
           onProgress({ type: 'llm', tag: 'RETRY STEP', message: `${job.company}: step ${progress} didn't move on${errs[0] ? ` ("${errs[0]}")` : ''} — answered ${answered} more field${answered === 1 ? '' : 's'}, trying again.` });
           const next = await findAction(dialog, { submit: false });
           if (next) await next.click().catch(() => {});
-          await randomSleep(1800, 2600);
+          await randomSleep(1500, 2200);
           continue;
         }
         const errs = await visibleErrors(dialog);
-        onProgress({ type: 'warn', tag: 'NEEDS REVIEW', message: `${job.company}: stuck on step ${progress}${errs[0] ? ` ("${errs[0]}")` : ''}. Added to Needs review.` });
-        await discardEasyApply(page);
-        return { success: false, reason: 'custom_screening_questions_needs_review' };
+        const seen = await describeStuck(page, dialog, job.company);
+        return review('custom_screening_questions_needs_review', `couldn't get past step ${progress}${errs[0] ? ` ("${errs[0]}")` : ''} — ${seen}.`);
       }
 
       // Final step: untick "follow company", then submit
@@ -520,8 +577,7 @@ export async function applyToJobWithPlaywright(page, job, profile, options = {},
           return { success: false, reason: 'dry_run', reachedSubmit: true };
         }
         onProgress({ type: 'playwright', tag: 'SUBMITTING', message: `Submitting application to ${job.company}...` });
-        await submit.scrollIntoViewIfNeeded().catch(() => {});
-        await submit.click();
+        await submit.click().catch(() => {});
 
         // Wait for LinkedIn's confirmation; click Submit again if it's still there
         const confirmation = page.getByText(/your application was sent|application (was )?sent|application submitted|you applied/i).first();
@@ -534,20 +590,18 @@ export async function applyToJobWithPlaywright(page, job, profile, options = {},
             if (await again.isVisible().catch(() => false)) await again.click().catch(() => {});
           }
         }
-        if (!sent) {
+        if (!sent && !(await getDialog(page))) {
           // No confirmation and the form is gone: check the job page itself
-          if (!(await getDialog(page))) {
-            await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
-            await randomSleep(2500, 3500);
-            sent = await page.getByText(/^Applied\b|application submitted|you applied/i).first().isVisible().catch(() => false);
-          }
+          await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+          await randomSleep(2500, 3500);
+          sent = await page.getByText(/^Applied\b|application submitted|you applied/i).first().isVisible().catch(() => false);
         }
         await clickButton(page, /^(Done|Close|Not now)$/);
         if (!sent) {
-          const errs = await getDialog(page) ? await invalidInputs(await getDialog(page)) : [];
-          onProgress({ type: 'warn', tag: 'NOT SENT', message: `LinkedIn didn't confirm the application to ${job.company}${errs[0] ? ` ("${errs[0].message}")` : ''}. Added to Needs review.` });
-          await discardEasyApply(page);
-          return { success: false, reason: 'unconfirmed' };
+          const open = await getDialog(page);
+          if (open && await humanCheck(page, open)) return review('verification_required', 'LinkedIn asked for a human verification check at submit.', 'HUMAN CHECK');
+          const errs = open ? await invalidInputs(open) : [];
+          return review('unconfirmed', `LinkedIn didn't confirm the application${errs[0] ? ` ("${errs[0].message}")` : ''}.`, 'NOT SENT');
         }
         const actualPacingSec = Number((pacingDelaySec + (Math.random() * 2.5 - 1)).toFixed(1));
         onProgress({ type: 'success', tag: 'SUBMITTED', message: `✅ Applied to ${job.company} — "${job.title}". Waiting ${actualPacingSec}s before the next job...` });
@@ -568,20 +622,16 @@ export async function applyToJobWithPlaywright(page, job, profile, options = {},
       if (!next && await findAction(dialog)) continue;
       if (!next) {
         const seen = await describeStuck(page, dialog, job.company);
-        onProgress({ type: 'warn', tag: 'STUCK', message: `Couldn't find Next / Review / Submit for ${job.company} (${seen}). Added to Needs review.` });
-        await discardEasyApply(page);
-        return { success: false, reason: 'unconfirmed' };
+        return review('unconfirmed', `couldn't find Next / Review / Submit (${seen}).`, 'STUCK');
       }
-      await randomSleep(1800, 2600);
+      await randomSleep(1500, 2200);
     }
 
-    await discardEasyApply(page);
-    return { success: false, reason: 'unconfirmed' };
+    return review('unconfirmed', 'the form had more steps than expected.');
   } catch (err) {
-    onProgress({ type: 'warn', tag: 'ERROR', message: `Problem applying to ${job.company}: ${err.message.split('\n')[0]}. Moving on.` });
-    await discardEasyApply(page);
-    return { success: false, reason: 'unconfirmed', error: err.message };
+    return review('unconfirmed', `something went wrong (${err.message.split('\n')[0].slice(0, 120)}).`, 'ERROR');
   }
 }
+
 // For local form tests only
 export const __test = { readFields, fillStep, clickChoice };

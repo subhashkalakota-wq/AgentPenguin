@@ -260,6 +260,12 @@ const ADAPTERS = {
 async function persistApplication(job, result) {
   if (!supabaseAdmin || !currentUserId) return;
   try {
+    if (job.status === 'needs_review') {
+      // Never turn an application that was already sent into "needs review"
+      const { data: existing } = await supabaseAdmin.from('applied_jobs').select('status')
+        .eq('user_id', currentUserId).eq('job_id', String(job.id)).maybeSingle();
+      if (existing?.status === 'applied') return;
+    }
     await supabaseAdmin.from('applied_jobs').upsert({
       user_id: currentUserId,
       job_id: String(job.id),
@@ -274,15 +280,41 @@ async function persistApplication(job, result) {
       llm_reasoning: typeof job.llmReasoning === 'object' ? JSON.stringify(job.llmReasoning) : (job.llmReasoning || ''),
       url: job.url || '',
       logo: '',
-      easy_apply: true
+      easy_apply: job.status === 'needs_review' ? result?.reason !== 'external_apply' : true,
+      // Why it needs a person (shown in the Needs review tab)
+      playwright_trace: job.status === 'needs_review' ? JSON.stringify({ reviewReason: job.reviewReason, reviewDetail: job.reviewDetail || '' }) : null,
     }, { onConflict: 'user_id,job_id' });
-    addLog('cdp', 'SUPABASE SYNC', `Saved ${PLATFORMS[job.platform]?.label || ''} application for ${job.company}.`);
+    addLog('cdp', 'SUPABASE SYNC', job.status === 'needs_review'
+      ? `Saved ${job.company} to Needs review (${job.reviewReason}).`
+      : `Saved ${PLATFORMS[job.platform]?.label || ''} application for ${job.company}.`);
   } catch (dbErr) {
     console.error('Supabase persistence error:', dbErr);
   }
 }
 
-const NEEDS_REVIEW_REASONS = new Set(['custom_screening_questions_needs_review', 'external_apply', 'unconfirmed']);
+const NEEDS_REVIEW_REASONS = new Set(['custom_screening_questions_needs_review', 'external_apply', 'unconfirmed', 'timeout', 'verification_required', 'login_required']);
+const APPLY_TIME_LIMIT_MS = 4 * 60 * 1000;
+let humanChecksInARow = 0;
+
+// Plain-English reason shown in the Needs review tab
+const REVIEW_LABELS = {
+  external_apply: 'Applies on the company website',
+  verification_required: 'Needs a human verification check',
+  login_required: 'Signed out of the job site',
+  custom_screening_questions_needs_review: "Penguin couldn't complete a form step",
+  unconfirmed: "Couldn't confirm the application was sent",
+  timeout: 'Took too long to finish',
+};
+
+const withTimeout = (promise, ms) => Promise.race([promise, new Promise(r => setTimeout(r, ms))]).catch(() => {});
+
+function markNeedsReview(job, result) {
+  job.status = 'needs_review';
+  job.reviewReason = REVIEW_LABELS[result.reason] || 'Needs a look';
+  job.reviewDetail = result.detail || '';
+  broadcastEvent('jobs', jobs);
+  persistApplication(job, result).catch(() => {});
+}
 
 // 1. SSE Stream Endpoint
 app.get('/api/stream', (req, res) => {
@@ -478,7 +510,10 @@ async function runAutonomousLoop() {
       const worker = async (n) => {
         await sleep(n * 1500 + Math.random() * 800); // stagger tab start-up
         let page;
-        try { page = await ctx.newPage(); } catch (err) { addLog('warn', 'TAB ERROR', `Couldn't open a tab: ${err.message}`); return; }
+        const openTab = async () => {
+          try { page = await ctx.newPage(); return true; } catch (err) { addLog('warn', 'TAB ERROR', `Couldn't open a tab: ${err.message}`); return false; }
+        };
+        if (!(await openTab())) return;
         try {
           while (!stop && queue.length) {
             while (agentState === 'paused') await sleep(1000);
@@ -488,38 +523,65 @@ async function runAutonomousLoop() {
             inFlight++;
             broadcastEvent('activeJob', job);
             let result;
+            let timer;
             try {
-              result = await adapter.apply(page, job, candidateProfile, { pacingDelaySec: config.pacingDelaySec },
-                (progress) => addLog(progress.type, progress.tag, `[Tab ${n + 1}] ${progress.message}`));
+              // One application may not hold a tab forever
+              const limit = new Promise((resolve) => {
+                timer = setTimeout(() => resolve({ success: false, reason: 'timeout', detail: `took longer than ${APPLY_TIME_LIMIT_MS / 60000} minutes.` }), APPLY_TIME_LIMIT_MS);
+              });
+              result = await Promise.race([
+                adapter.apply(page, job, candidateProfile, { pacingDelaySec: config.pacingDelaySec },
+                  (progress) => addLog(progress.type, progress.tag, `[Tab ${n + 1}] ${progress.message}`)),
+                limit,
+              ]);
             } catch (err) {
-              result = { success: false, reason: 'unconfirmed', error: err.message };
+              result = { success: false, reason: 'unconfirmed', detail: `something went wrong (${err.message.split('\n')[0]}).` };
             } finally {
+              clearTimeout(timer);
               inFlight--;
+            }
+
+            if (result.reason === 'timeout') {
+              // The old tab may still be busy: discard its form, close it and start fresh
+              addLog('warn', 'TIMED OUT', `[Tab ${n + 1}] ${job.company}: ${result.detail} Added to Needs review.`);
+              const stale = page;
+              if (key === 'linkedin') await withTimeout(discardEasyApply(stale), 15000);
+              await stale.close().catch(() => {});
+              if (!(await openTab())) break;
             }
 
             if (result.success) {
               appliedForSlot++;
               totalApplied++;
+              humanChecksInARow = 0;
               job.status = 'applied';
+              job.reviewReason = null;
               job.appliedAt = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true }) + ' IST';
               job.applied_at = new Date().toISOString();
               job.stepsCompleted = job.stepsTotal;
               broadcastEvent('jobs', jobs);
               emitProgress(key, role);
               await persistApplication(job, result);
-            } else if (result.reason === 'login_required' || result.reason === 'verification_required') {
-              job.status = 'needs_review';
-              broadcastEvent('jobs', jobs);
+            } else if (result.reason === 'login_required') {
+              markNeedsReview(job, result);
               if (agentState === 'running') {
-                addLog('warn', 'ACTION REQUIRED', `[${label}] ${result.reason === 'login_required' ? 'Please sign in' : 'Please complete the security check'} in ${label}. Agent paused — click Resume when done.`);
+                addLog('warn', 'ACTION REQUIRED', `[${label}] Please sign in to ${label} in Chrome. Agent paused — click Resume when done.`);
+                agentState = 'paused';
+                broadcastEvent('agentState', agentState);
+              }
+            } else if (result.reason === 'verification_required') {
+              markNeedsReview(job, result);
+              // One check is usually one job; several in a row means the account is being checked
+              if (++humanChecksInARow >= 3 && agentState === 'running') {
+                addLog('warn', 'ACTION REQUIRED', `[${label}] ${label} keeps asking for a human verification check. Complete it in Chrome, then click Resume.`);
                 agentState = 'paused';
                 broadcastEvent('agentState', agentState);
               }
             } else if (NEEDS_REVIEW_REASONS.has(result.reason)) {
-              job.status = 'needs_review';
-              broadcastEvent('jobs', jobs);
+              markNeedsReview(job, result);
             } else if (result.reason === 'tab_closed') {
-              break; // this worker's tab is gone; the others carry on
+              // This tab was closed (by the user?): open a new one and carry on
+              if (!(await openTab())) break;
             }
 
             // Pacing between applications in this tab (LinkedIn applier paces itself)
@@ -530,7 +592,7 @@ async function runAutonomousLoop() {
           }
         } finally {
           // Stopped mid-form? Discard the draft before closing so LinkedIn doesn't save it
-          if (key === 'linkedin') await discardEasyApply(page).catch(() => {});
+          if (key === 'linkedin') await withTimeout(discardEasyApply(page), 15000);
           await page.close().catch(() => {});
         }
       };
@@ -696,7 +758,7 @@ app.post('/api/step', async (req, res) => {
     nextJob.applied_at = new Date().toISOString();
     await persistApplication(nextJob, result);
   } else if (NEEDS_REVIEW_REASONS.has(result.reason)) {
-    nextJob.status = 'needs_review';
+    markNeedsReview(nextJob, result);
   }
   broadcastEvent('jobs', jobs);
   if (agentState === 'running') {
@@ -756,8 +818,7 @@ app.post('/api/apply-batch', async (req, res) => {
         broadcastEvent('jobs', jobs);
         await persistApplication(job, result);
       } else if (NEEDS_REVIEW_REASONS.has(result.reason)) {
-        job.status = 'needs_review';
-        broadcastEvent('jobs', jobs);
+        markNeedsReview(job, result);
       }
     }
 

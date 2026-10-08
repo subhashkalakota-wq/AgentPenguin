@@ -7,7 +7,8 @@
  * clicks "Allow" once and it keeps working until Chrome is quit or remote debugging
  * is turned off. Then the bridge exits on its own.
  *
- * Usage: node server/cdpBridge.js <ws://127.0.0.1:PORT/devtools/browser/ID>
+ * Usage: node server/cdpBridge.js --launch <ws://127.0.0.1:PORT/devtools/browser/ID>
+ *   (--launch starts the bridge fully detached and returns immediately)
  *
  * Security: listens on 127.0.0.1 only, and every request must carry a random token
  * that is written to server/data/cdp-bridge.json (readable only by this user).
@@ -18,6 +19,17 @@ import path from 'path';
 import crypto from 'crypto';
 import { WebSocketServer } from 'ws';
 import { createRelay } from './cdpProxy.js';
+
+import { spawn } from 'child_process';
+import { fileURLToPath } from 'url';
+
+// "--launch": start the real bridge as a fully separate process and exit at once, so the
+// bridge isn't a child of the backend (stopping or restarting the backend can't take it down)
+if (process.argv[2] === '--launch') {
+  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), process.argv[3]], { cwd: process.cwd(), detached: true, stdio: 'ignore' });
+  child.unref();
+  process.exit(0);
+}
 
 const DATA_DIR = path.resolve('server/data');
 export const BRIDGE_FILE = path.join(DATA_DIR, 'cdp-bridge.json');
@@ -109,5 +121,7 @@ server.listen(0, '127.0.0.1', async () => {
   }
 });
 
-process.on('SIGTERM', () => { relay.close(); exit(0); });
-process.on('SIGINT', () => { relay.close(); exit(0); });
+process.on('SIGTERM', () => { log('Stopped (SIGTERM).'); relay.close(); exit(0); });
+// Ctrl+C / a closed terminal belong to the backend, not to the bridge
+process.on('SIGINT', () => log('Ignored SIGINT.'));
+process.on('SIGHUP', () => log('Ignored SIGHUP.'));

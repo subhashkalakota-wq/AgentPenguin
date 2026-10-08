@@ -1162,6 +1162,15 @@
 .pg-col-loc { width: 16%; }
 .pg-col-score { width: 11%; }
 .pg-col-status { width: 12%; }
+/* Why a job needs review, under its status badge */
+.pg-review-reason {
+  display: block;
+  margin-top: 4px;
+  max-width: 190px;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
 .pg-col-date { width: 11%; }
 .pg-col-actions { width: 104px; }
 

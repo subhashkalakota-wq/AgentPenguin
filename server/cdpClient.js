@@ -77,7 +77,7 @@ export async function getBridgeEndpoint(upstream, log = () => {}) {
   if (b?.state === 'ready') return bridgeWsUrl(b);
 
   if (!b) {
-    const child = spawn(process.execPath, [BRIDGE_SCRIPT, upstream], { cwd: process.cwd(), detached: true, stdio: 'ignore' });
+    const child = spawn(process.execPath, [BRIDGE_SCRIPT, '--launch', upstream], { cwd: process.cwd(), detached: true, stdio: 'ignore' });
     child.unref();
   }
   log('Click "Allow" in Chrome. You only need to do this once — Penguin stays connected until you quit Chrome.');

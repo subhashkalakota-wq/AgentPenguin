@@ -99,6 +99,12 @@ function skillLevel(question, profile) {
 
 const isSelfRating = (q) => /rate|rating|proficien|skill|level|expertise|experience|familiar|knowledge|confident|comfortable (with|using|in)|how (well|good)/.test(q);
 
+// ---- Self-identification (EEO) questions ----
+const SELF_ID = /gender|\bsex\b|race|ethnic|hispanic|latin[oa]|veteran|disabilit|pronoun|sexual orientation|transgender/i;
+const isSelfId = (question, options = []) => SELF_ID.test(question || '')
+  || options.filter(o => /hispanic|latin[oa]|asian|black or african|white|native hawaiian|two or more races|\bmale\b|\bfemale\b|non-binary|veteran|disability/i.test(o)).length >= 2;
+const declineOption = (options = []) => options.find(o => /decline|don['’]?t wish|do not wish|prefer not|not to (say|answer|disclose|identify)|rather not|choose not/i.test(o)) || null;
+
 // Rough annual number from strings like "₹22,00,000 / year (22 LPA)" or "22 LPA"
 function salaryNumber(profile) {
   const raw = String(profile.salaryFloor || '');
@@ -235,10 +241,8 @@ function ruleAnswer({ question, type, options = [] }, profile) {
   }
   if (/background check|drug (test|screen)|comfortable|willing|able to start|are you available|agree|consent|terms/.test(q)) return yes();
 
-  // Self-identification: prefer "decline to answer" when offered
-  if (/gender|race|ethnic|veteran|disabilit|pronoun|sexual orientation/.test(q)) {
-    return isChoice ? pickOption(options, 'I don’t wish to answer', "I don't wish to answer", 'Decline to self identify', 'Prefer not to say', 'Prefer not to answer') : null;
-  }
+  // Self-identification (EEO): always decline when offered; never guess
+  if (isSelfId(question, options)) return isChoice || type === 'multi' ? declineOption(options) : null;
 
   // Contact & links
   if (/linkedin/.test(q)) return profile.linkedinUrl || null;
@@ -317,6 +321,11 @@ async function llmAnswer({ question, type, options = [] }, profile, { mustAnswer
 // choices -> "Yes" if offered, else the first option; experience numbers -> 0 (truthful
 // for a skill not on the profile). Free-text stays unanswered (needs review).
 function forcedAnswer({ question, type, options = [] }, profile) {
+  // Gender / race / veteran / disability: only ever "decline", never a made-up identity
+  if (isSelfId(question, options)) {
+    const decline = declineOption(options);
+    return decline ? (type === 'multi' ? [decline] : decline) : null;
+  }
   if (type === 'multi' && options.length) {
     const none = pickOption(options, 'None of the above', 'None', 'Not applicable');
     return [none || options[0]];
@@ -369,8 +378,10 @@ export async function answerQuestion(field, profile, { force = false } = {}) {
     const answer = ruleAnswer(field, profile);
     if (answer != null) result = { answer, source: 'rules' };
   }
+  // Identity questions are never sent to the AI: decline (rules) or leave for the user
+  const selfId = isSelfId(field.question, field.options);
   // 3. LLM (Groq / OpenAI / Gemini)
-  if (!result) {
+  if (!result && !selfId) {
     const answer = await llmAnswer(field, profile);
     if (answer != null) result = { answer, source: 'ai' };
   }
@@ -379,7 +390,7 @@ export async function answerQuestion(field, profile, { force = false } = {}) {
     return result;
   }
   // 4. Required field: ask the AI again, this time insisting on an answer
-  if (force) {
+  if (force && !selfId) {
     const answer = await llmAnswer(field, profile, { mustAnswer: true }).catch(() => null);
     if (answer != null) return { answer, source: 'ai' };
   }

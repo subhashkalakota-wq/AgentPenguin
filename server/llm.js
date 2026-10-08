@@ -2,6 +2,7 @@
  * JSON chat helper: tries Groq, then OpenAI, then Gemini (whichever keys are set and working).
  * Returns the parsed JSON object, or null if no provider answered.
  */
+const LLM_TIMEOUT_MS = 20000; // a slow AI call must never stall an application
 let openaiDisabledUntil = 0; // back off after quota/auth errors instead of retrying every call
 let groqDisabledUntil = 0;
 
@@ -14,6 +15,7 @@ async function viaGroq(system, user) {
   for (const model of [...new Set(GROQ_MODELS)]) {
     const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
+      signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
       body: JSON.stringify({
         model,
@@ -39,6 +41,7 @@ async function viaOpenAI(system, user) {
   if (!process.env.OPENAI_API_KEY || Date.now() < openaiDisabledUntil) return null;
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
+    signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
     body: JSON.stringify({
       model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
@@ -65,6 +68,7 @@ async function viaGemini(system, user) {
   for (const model of [...new Set(GEMINI_MODELS)]) {
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
       method: 'POST',
+      signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },

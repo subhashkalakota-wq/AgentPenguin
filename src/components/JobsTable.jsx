@@ -504,7 +504,12 @@ export default function JobsTable({
                         </div>
                       ) : <span className="pg-muted">—</span>}
                     </td>
-                    <td className="pg-col-status"><StatusBadge status={job.status} /></td>
+                    <td className="pg-col-status">
+                      <StatusBadge status={job.status} />
+                      {job.status === 'needs_review' && job.reviewReason && (
+                        <span className="pg-review-reason" title={job.reviewDetail || job.reviewReason}>{job.reviewReason}</span>
+                      )}
+                    </td>
                     <td className="pg-col-date">
                       <span className="pg-date">{date.day}</span>
                       {date.time && <span className="pg-time">{date.time}</span>}
