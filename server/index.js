@@ -6,7 +6,7 @@ import os from 'os';
 import path from 'path';
 import fs from 'fs';
 import { createClient } from '@supabase/supabase-js';
-import { connectToUserChrome } from './cdpClient.js';
+import { connectToUserChrome, bridgeReady } from './cdpClient.js';
 import { fetchGuestJobs } from './linkedinFeed.js';
 import { filterJobsWithLLM } from './llmFilter.js';
 import { applyToJobWithPlaywright, discardEasyApply } from './playwrightApplier.js';
@@ -1125,4 +1125,6 @@ Would you like to explore **1. VISO-DSA (DSA Lab)**, **2. RESUME ANALYZE (ATS Au
 app.listen(PORT, () => {
   console.log(`[JobAgent Backend] Server running on http://localhost:${PORT}`);
   console.log(`[JobAgent Backend] Telemetry SSE stream ready at http://localhost:${PORT}/api/stream`);
+  // Chrome already allowed Penguin (the bridge outlives backend restarts): reconnect without asking again
+  bridgeReady().then((ok) => ok && ensureBrowser()).catch(() => {});
 });

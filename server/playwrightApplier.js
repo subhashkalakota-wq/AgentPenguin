@@ -30,6 +30,60 @@ async function clickButton(scope, pattern) {
   return false;
 }
 
+// The button that moves the form on: Next / Review / Continue / Submit
+const ACTION_TEXT = /^\s*(Next|Review|Continue|Submit( application)?)\b/i;
+const MOVE_TEXT = /^\s*(Next|Review|Continue)\b/i; // never Submit: that has its own confirmed path
+
+async function findAction(dialog, { submit = true } = {}) {
+  const buttons = dialog.locator('button, [role="button"]').filter({ hasText: submit ? ACTION_TEXT : MOVE_TEXT });
+  const n = await buttons.count().catch(() => 0);
+  for (let i = n - 1; i >= 0; i--) { // the footer buttons come last
+    const b = buttons.nth(i);
+    if (await b.isVisible().catch(() => false) && await b.isEnabled().catch(() => false)) return b;
+  }
+  return null;
+}
+
+/**
+ * Waits until the form step has finished drawing (its Next/Review/Submit button is
+ * visible). With many tabs loading at once a step can take several seconds.
+ */
+async function waitForAction(dialog, timeoutMs = 15000, opts = {}) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const b = await findAction(dialog, opts);
+    if (b || Date.now() > deadline) return b;
+    await randomSleep(400, 500);
+  }
+}
+
+async function waitForDialog(page, timeoutMs = 12000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const d = await getDialog(page);
+    if (d || Date.now() > deadline || page.isClosed()) return d;
+    await randomSleep(400, 500);
+  }
+}
+
+// What the form shows when Penguin can't move on: heading, buttons, and a screenshot
+async function describeStuck(page, dialog, company) {
+  const info = await dialog.evaluate(d => ({
+    heading: (d.querySelector('h1, h2, h3')?.innerText || '').trim().slice(0, 80),
+    buttons: Array.from(d.querySelectorAll('button, [role="button"]'))
+      .filter(b => b.offsetParent || b.getClientRects().length)
+      .map(b => (b.innerText || b.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ')).filter(Boolean).slice(0, 8),
+  })).catch(() => ({ heading: '', buttons: [] }));
+  let shot = '';
+  try {
+    const dir = path.resolve('server/data/stuck');
+    fs.mkdirSync(dir, { recursive: true });
+    shot = path.join(dir, `${new Date().toISOString().replace(/[:.]/g, '-')}-${String(company).replace(/[^a-z0-9]+/gi, '_').slice(0, 40)}.png`);
+    await page.screenshot({ path: shot });
+  } catch { shot = ''; }
+  return `form "${info.heading || '?'}", buttons: [${info.buttons.join(' | ') || 'none'}]${shot ? `, screenshot ${path.relative(process.cwd(), shot)}` : ''}`;
+}
+
 // LinkedIn asks "Save this application?" when a form is closed; always answer Discard
 // so unfinished applications are never left behind as saved drafts.
 async function answerSavePrompt(page) {
@@ -420,13 +474,15 @@ export async function applyToJobWithPlaywright(page, job, profile, options = {},
     }
 
     await easyApply.click();
-    await randomSleep(2500, 3500);
+    await randomSleep(1500, 2000);
 
     let lastProgress = '';
     let sameStepCount = 0;
     for (let step = 1; step <= 15; step++) {
       if (page.isClosed()) return { success: false, reason: 'tab_closed' };
-      const dialog = await getDialog(page);
+      const dialog = await waitForDialog(page);
+      // Let the step finish drawing before reading it
+      if (dialog) await waitForAction(dialog);
       if (!dialog) {
         onProgress({ type: 'warn', tag: 'NO FORM', message: `Easy Apply form didn't open for ${job.company}. Added to Needs review.` });
         return { success: false, reason: 'unconfirmed' };
@@ -443,7 +499,8 @@ export async function applyToJobWithPlaywright(page, job, profile, options = {},
           const { answered } = await fillStep(dialog, profile, onProgress, { forceAll: true });
           const errs = await visibleErrors(dialog);
           onProgress({ type: 'llm', tag: 'RETRY STEP', message: `${job.company}: step ${progress} didn't move on${errs[0] ? ` ("${errs[0]}")` : ''} — answered ${answered} more field${answered === 1 ? '' : 's'}, trying again.` });
-          await clickButton(dialog, /^(Next|Review|Continue)/i);
+          const next = await findAction(dialog, { submit: false });
+          if (next) await next.click().catch(() => {});
           await randomSleep(1800, 2600);
           continue;
         }
@@ -505,9 +562,13 @@ export async function applyToJobWithPlaywright(page, job, profile, options = {},
         onProgress({ type: 'warn', tag: 'UNSURE', message: `${job.company}: couldn't fill "${unanswered.slice(0, 2).join('", "').slice(0, 120)}" — trying to continue.` });
       }
 
-      const moved = await clickButton(dialog, /^(Next|Review|Continue)/i);
-      if (!moved) {
-        onProgress({ type: 'warn', tag: 'STUCK', message: `Couldn't find Next / Review / Submit for ${job.company}. Added to Needs review.` });
+      const next = await waitForAction(dialog, 8000, { submit: false });
+      if (next) await next.click().catch(() => {});
+      // Only Submit is left (it appeared late): go round again so the submit path handles it
+      if (!next && await findAction(dialog)) continue;
+      if (!next) {
+        const seen = await describeStuck(page, dialog, job.company);
+        onProgress({ type: 'warn', tag: 'STUCK', message: `Couldn't find Next / Review / Submit for ${job.company} (${seen}). Added to Needs review.` });
         await discardEasyApply(page);
         return { success: false, reason: 'unconfirmed' };
       }

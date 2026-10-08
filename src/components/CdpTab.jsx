@@ -127,7 +127,7 @@ export default function CdpTab({ cdpStatus, config, onSaveConfig, onTestCDP, log
           <ol className="pg-steps-list">
             <li>In your Chrome, open <code>chrome://inspect/#remote-debugging</code> (the <strong>Connect my Chrome</strong> button opens it for you).</li>
             <li>Turn on <strong>Allow remote debugging for this browser instance</strong>.</li>
-            <li>Click <strong>Connect my Chrome</strong> again. If Chrome asks whether to allow the connection, choose <strong>Allow</strong>.</li>
+            <li>Click <strong>Connect my Chrome</strong> again. When Chrome asks whether to allow the connection, choose <strong>Allow</strong>. You only do this once: Penguin stays connected until you quit Chrome.</li>
             <li>Open LinkedIn, Naukri and/or Indeed in that same Chrome and sign in.</li>
           </ol>
         </section>
