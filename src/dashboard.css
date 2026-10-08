@@ -17,6 +17,10 @@
 }
 
 :root[data-brand='agent'] {
+  /* Type: Inter for text, tables and controls; Manrope for headings */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-heading: 'Manrope', 'Inter', -apple-system, sans-serif;
+
   --pg-ink: #212121;
   --pg-paper: #F6F6F6;
   --pg-sage: #6D9886;
@@ -110,6 +114,24 @@
   --badge-border: #3B3732;
   --badge-text: #F6F6F6;
 }
+
+/* ---------- Typography ---------- */
+[data-brand='agent'] body {
+  font-family: var(--font-sans);
+  font-feature-settings: 'cv11', 'ss03'; /* Inter: single-storey a, rounder quotes */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+[data-brand='agent'] :is(h1, h2, h3, h4, .pg-card-title, .pg-page-title, .pg-brand-name, .pg-modal-head h2, .pg-stat-value, .pg-mock-h) {
+  font-family: var(--font-heading);
+  font-weight: 750;
+  letter-spacing: -0.015em;
+}
+[data-brand='agent'] :is(h3, h4, .pg-card-title) { font-weight: 700; }
+/* Numbers line up in tables, counters and timers */
+[data-brand='agent'] :is(table, .pg-stat-value, .pg-quota, .pg-mk-num, .pg-test-timer, .pg-adm-col-count, .pg-run-summary-count) { font-variant-numeric: tabular-nums; }
+[data-brand='agent'] :is(button, input, select, textarea) { font-family: inherit; }
 
 /* ---------- Palette accents (sage + sand) ---------- */
 /* Run Penguin: the one sage call to action */
