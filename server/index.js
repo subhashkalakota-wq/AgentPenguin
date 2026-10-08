@@ -8,6 +8,7 @@ import fs from 'fs';
 import { createClient } from '@supabase/supabase-js';
 import { connectToUserChrome, bridgeReady } from './cdpClient.js';
 import { fetchGuestJobs, experienceFilter } from './linkedinFeed.js';
+import { getMarketInsights } from './marketInsights.js';
 import { filterJobsWithLLM } from './llmFilter.js';
 import { applyToJobWithPlaywright, discardEasyApply } from './playwrightApplier.js';
 import {
@@ -698,6 +699,21 @@ async function runAutonomousLoop() {
     broadcastEvent('agentState', agentState);
   }
 }
+
+// Job-market insights for the Applications tab (cached 30 min; ?refresh=1 to update)
+app.get('/api/market', async (req, res) => {
+  try {
+    const roles = String(req.query.roles || '').split('|').map(r => r.trim()).filter(Boolean);
+    const fallbackRoles = Array.isArray(config.searchQueries) && config.searchQueries.length ? config.searchQueries : [config.searchQuery];
+    res.json(await getMarketInsights({
+      location: String(req.query.location || candidateProfile.location || config.location || ''),
+      roles: roles.length ? roles : fallbackRoles,
+      refresh: req.query.refresh === '1',
+    }));
+  } catch (err) {
+    res.status(500).json({ error: `Couldn't load market insights: ${err.message}` });
+  }
+});
 
 // Which job platforms are open as tabs in the attached Chrome
 app.get('/api/platforms/status', async (req, res) => {

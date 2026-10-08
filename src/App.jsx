@@ -5,6 +5,7 @@ import { DASHBOARD_TABS } from './data/dashboardTabs';
 import OverviewTab from './components/OverviewTab';
 import PlatformPickerModal from './components/PlatformPickerModal';
 import PlatformsBanner from './components/PlatformsBanner';
+import MarketInsights from './components/MarketInsights';
 import PenguinWelcome from './components/PenguinWelcome';
 import CdpReminder from './components/CdpReminder';
 import RunningPenguinOverlay, { RunningPenguinPill } from './components/RunningPenguinOverlay';
@@ -839,6 +840,11 @@ export default function App() {
         return (
           <>
           <PlatformsBanner onRun={handleStart} />
+          <MarketInsights
+            location={config.location || profile?.location || ''}
+            roles={Array.isArray(config.searchQueries) && config.searchQueries.length ? config.searchQueries : [config.searchQuery].filter(Boolean)}
+            onEditSettings={() => navigateTo('/config')}
+          />
           <JobsTable
             jobs={jobs}
             activeJobId={activeJob?.id}
