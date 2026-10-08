@@ -559,6 +559,7 @@ async function runLoop({ cap } = {}) {
     addLog('cdp', 'RUN PLAN', `Applying on ${plan.map(k => PLATFORMS[k].label).join(', ')} for ${targetRoles.map(r => `"${r}"`).join(', ')}${searchLocations(config).length ? ` in ${searchLocations(config).map(placeName).join(', ')}` : ''}. Target: ${totalMax} applications — Penguin keeps searching until it gets there or you press Stop.`);
 
     let totalApplied = 0;
+    const appliedBy = {}; // applications sent per site in this run
     const emitProgress = (platform, role, location = '') => broadcastEvent('runProgress', {
       platform, platformLabel: PLATFORMS[platform]?.label, role, location, applied: totalApplied, cap: totalMax,
       platforms: plan, platformIndex: plan.indexOf(platform),
@@ -623,6 +624,7 @@ async function runLoop({ cap } = {}) {
             if (result.success) {
               appliedForSlot++;
               totalApplied++;
+              appliedBy[key] = (appliedBy[key] || 0) + 1;
               humanChecksInARow = 0;
               job.status = 'applied';
               job.reviewReason = null;
@@ -685,18 +687,35 @@ async function runLoop({ cap } = {}) {
     let round = 0;
     const blockPlatform = (key) => targetRoles.forEach(r => locations.forEach(l => exhausted.add(`${key}|${r}|${l}`)));
 
+    // Sites take turns and share the target fairly (15 on 3 sites = 5 each). A site that runs
+    // out of matches, is blocked or closed hands its unused share to the others.
+    const siteDone = (k) => targetRoles.every(r => locations.every(l => exhausted.has(`${k}|${r}|${l}`)));
+    const allowance = (k) => {
+      const active = plan.filter(p => !siteDone(p));
+      if (!active.includes(k)) return 0;
+      const doneApplied = plan.filter(p => !active.includes(p)).reduce((n, p) => n + (appliedBy[p] || 0), 0);
+      const fair = Math.ceil((totalMax - doneApplied) / active.length);
+      return Math.max(0, Math.min(fair - (appliedBy[k] || 0), totalMax - totalApplied));
+    };
+    if (plan.length > 1) {
+      const each = Math.floor(totalMax / plan.length);
+      addLog('cdp', 'SPLIT', `Sharing ${totalMax} applications across ${plan.map((k, i) => `${PLATFORMS[k].label} (${each + (i < totalMax % plan.length ? 1 : 0)})`).join(', ')}. If a site runs out of matches, the others take its share.`);
+    }
+
     runLoop:
     while (totalApplied < totalMax && agentState !== 'idle' && agentState !== 'completed') {
       let activeSlots = 0;
-      for (const key of plan) {
-        const adapter = ADAPTERS[key];
-        const label = PLATFORMS[key].label;
-        for (const role of targetRoles) {
-          for (const where of locations) {
+      for (const role of targetRoles) {
+        for (const where of locations) {
+          for (const key of plan) {
+            const adapter = ADAPTERS[key];
+            const label = PLATFORMS[key].label;
             while (agentState === 'paused') await sleep(1000);
             if (agentState !== 'running' || totalApplied >= totalMax) break runLoop;
             const slot = `${key}|${role}|${where}`;
             if (exhausted.has(slot)) continue;
+            // This site already has its share for now; the others get their turn
+            if (allowance(key) <= 0) continue;
             activeSlots++;
             const inPlace = where ? ` in ${placeName(where)}` : '';
 
@@ -750,7 +769,7 @@ async function runLoop({ cap } = {}) {
             }
             addLog('llm', 'SHORTLIST READY', `[${label}] ${shortlist.length} matches for "${role}"${inPlace}.`);
 
-            const outcome = await applyInParallel(key, role, shortlist, totalMax - totalApplied, where);
+            const outcome = await applyInParallel(key, role, shortlist, allowance(key), where);
             if (outcome.stop) break runLoop;
           }
         }
