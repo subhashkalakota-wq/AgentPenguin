@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   TrendingUp, Building2, MapPin, Newspaper, Cpu, RefreshCw, ChevronDown, ChevronUp,
-  CalendarDays, Clock, ExternalLink, AlertTriangle, Pencil,
+  CalendarDays, Clock, ExternalLink, AlertTriangle, Pencil, Landmark, Flame,
 } from 'lucide-react';
 
 import { placeName } from '../../shared/locations';
@@ -21,6 +21,80 @@ function ago(iso) {
 const dayLabel = (d) => (d ? new Date(`${d}T00:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : null);
 const isToday = (d) => d === new Date().toISOString().slice(0, 10);
 const shortRole = (r) => r.replace(/\(.*?\)/g, '').trim();
+
+const GOVT_FILTERS = ['All', 'Group & PSC', 'Police', 'Banks', 'Railways', 'Defence', 'Teaching'];
+
+// Government exams and recruitment: notifications, admit cards, results (state boards first)
+function GovernmentCard({ government, city }) {
+  const [filter, setFilter] = useState('All');
+  const [all, setAll] = useState(false);
+  const updates = government?.updates || [];
+  const list = updates.filter(u => filter === 'All' || u.category === filter)
+    .sort((a, b) => (b.local ? 1 : 0) - (a.local ? 1 : 0) || new Date(b.publishedAt) - new Date(a.publishedAt));
+  const shown = all ? list : list.slice(0, 6);
+  return (
+    <article className="pg-card pg-mk-govt">
+      <div className="pg-mk-title">
+        <Landmark size={16} /> <h3>Government jobs</h3>
+        <span className="pg-mk-sub">{government?.state ? `${government.state} + all India` : 'All India'}</span>
+      </div>
+      <div className="pg-mk-filters" role="tablist" aria-label="Government job type">
+        {GOVT_FILTERS.map(f => {
+          const n = f === 'All' ? updates.length : updates.filter(u => u.category === f).length;
+          if (f !== 'All' && !n) return null;
+          return <button key={f} type="button" role="tab" aria-selected={filter === f} className={`pg-chip ${filter === f ? 'active' : ''}`} onClick={() => { setFilter(f); setAll(false); }}>{f} <span>{n}</span></button>;
+        })}
+      </div>
+      {shown.length ? (
+        <ul className="pg-mk-govt-list">
+          {shown.map(u => (
+            <li key={u.url}>
+              <div className="pg-mk-govt-tags">
+                {u.kind && <span className={`pg-mk-kind is-${u.kind.toLowerCase().replace(/\s+/g, '-')}`}>{u.kind}</span>}
+                <span className="pg-mk-cat">{u.category}</span>
+                {u.local && <span className="pg-mk-local"><MapPin size={10} /> {u.local}</span>}
+              </div>
+              <a href={u.url} target="_blank" rel="noreferrer">{u.title}</a>
+              <span className="pg-mk-govt-meta">{u.source} · {ago(u.publishedAt)}</span>
+            </li>
+          ))}
+        </ul>
+      ) : <p className="pg-mk-empty">No {filter === 'All' ? '' : `${filter.toLowerCase()} `}updates this week{city ? ` for ${city}` : ''}.</p>}
+      {list.length > 6 && <button type="button" className="pg-mk-more" onClick={() => setAll(a => !a)}>{all ? 'Show less' : `Show ${list.length - 6} more`}</button>}
+      {government?.sites?.length > 0 && (
+        <div className="pg-mk-sites">
+          <span>Official sites</span>
+          {government.sites.map(site => <a key={site.url} href={site.url} target="_blank" rel="noreferrer">{site.name}</a>)}
+        </div>
+      )}
+    </article>
+  );
+}
+
+// Popular roles ranked by new openings today in the city
+function TrendingCard({ trending, city }) {
+  const max = Math.max(1, ...(trending || []).map(t => t.today?.value || 0));
+  return (
+    <article className="pg-card pg-mk-trending">
+      <div className="pg-mk-title"><Flame size={16} /> <h3>Trending jobs in {city}</h3></div>
+      {trending?.length ? (
+        <ol className="pg-mk-trend-list">
+          {trending.map((t, i) => (
+            <li key={t.role}>
+              <a href={t.url} target="_blank" rel="noreferrer">
+                <span className="pg-mk-rank">{i + 1}</span>
+                <span className="pg-mk-trend-role">{t.role}</span>
+                <span className="pg-mk-trend-bar" aria-hidden="true"><span style={{ width: `${(t.today.value / max) * 100}%` }} /></span>
+                <span className="pg-mk-trend-num"><strong>{t.today.label}</strong> today</span>
+              </a>
+            </li>
+          ))}
+        </ol>
+      ) : <p className="pg-mk-empty">Trending roles aren't available right now.</p>}
+      <p className="pg-mk-foot">New LinkedIn openings in the last 24 hours, across popular roles.</p>
+    </article>
+  );
+}
 
 const MOOD_CLASS = { 'Hiring is strong': 'is-strong', Steady: 'is-steady', Mixed: 'is-mixed', Cautious: 'is-cautious' };
 
@@ -135,12 +209,12 @@ export default function MarketInsights({ locations = [], roles = [], onEditSetti
 
       {!collapsed && !data && !error && (
         <div className="pg-market-grid" aria-busy="true">
-          {['pulse', 'openings', 'companies', 'walkins', 'news'].map(k => (
+          {['pulse', 'openings', 'govt', 'trending', 'companies', 'walkins', 'news'].map(k => (
             <div key={k} className={`pg-card pg-mk-${k} pg-mk-skeleton`}>
               <span /><span /><span />
             </div>
           ))}
-          <p className="pg-mk-loading">Gathering today's openings, walk-ins and news… the first load takes a few seconds.</p>
+          <p className="pg-mk-loading">Gathering today's openings, government updates, walk-ins and news… the first load takes a few seconds.</p>
         </div>
       )}
 
@@ -184,6 +258,10 @@ export default function MarketInsights({ locations = [], roles = [], onEditSetti
             </ul>
             <p className="pg-mk-foot">New LinkedIn listings for your roles.</p>
           </article>
+
+          {/* Government exams and recruitment, and trending roles */}
+          <GovernmentCard government={data.government} city={city} />
+          <TrendingCard trending={data.trending} city={city} />
 
           {/* Who is hiring */}
           <article className="pg-card pg-mk-companies">

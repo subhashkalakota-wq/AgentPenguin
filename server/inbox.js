@@ -70,6 +70,9 @@ export function createInbox(deps) {
       host: account.imapHost, port: account.imapPort, secure: true,
       auth: { user: account.user, pass: account.pass }, logger: false, socketTimeout: 60000,
     });
+    // A dropped connection (Gmail resets idle sockets) must not crash the backend:
+    // log it; the next check reconnects
+    client.on('error', (err) => log('warn', 'INBOX', `Email connection dropped (${err.code || err.message}); will retry on the next check.`));
     await client.connect();
     const lock = await client.getMailboxLock('INBOX');
     const seen = new Set(loadState().inboxSeen || []);

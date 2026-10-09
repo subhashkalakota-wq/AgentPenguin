@@ -1518,6 +1518,10 @@ Would you like to explore **1. VISO-DSA (DSA Lab)**, **2. RESUME ANALYZE (ATS Au
 }
 
 // Start listening
+// A stray failure in background work (email, AI, a closed tab) is logged instead of
+// stopping the whole backend in the middle of a run
+process.on('unhandledRejection', (err) => console.warn('[unhandled]', err?.message || err));
+
 app.listen(PORT, () => {
   console.log(`[JobAgent Backend] Server running on http://localhost:${PORT}`);
   console.log(`[JobAgent Backend] Telemetry SSE stream ready at http://localhost:${PORT}/api/stream`);

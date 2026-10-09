@@ -7,8 +7,10 @@
  *   companies, and walk-in postings (confirmed from the posting text).
  * - Google News RSS (India edition): job-market and tech news.
  * - Hacker News: developer news.
- * The AI (llm.js) only summarises the headlines it is given and extracts walk-in
- * dates/venues from posting text; nothing is invented. Results are cached 30 min.
+ * - Google News RSS: government exam updates (UPSC, SSC, state PSC groups, police,
+ *   banks, railways, defence, teaching) incl. the user's state boards.
+ * The AI (llm.js) only extracts walk-in dates/venues from posting text; nothing is
+ * invented. Results are cached 30 min.
  */
 import { parseGuestJobs } from './linkedinFeed.js';
 import { llmJson, hasLLM } from './llm.js';
@@ -90,11 +92,11 @@ async function hackerNews(max = 6) {
 const OFF_TOPIC = /biotech|biochem|pharma|nursing|teacher|police|railway|constable|army|navy|sarkari|govt job|deals?\b|discount|sale\b|price cut|wordle|strands|hints|answers|horoscope|cricket|box office/i;
 const PRESS_RELEASE = /business wire|pr newswire|globenewswire|accesswire|einpresswire/i;
 
-// Merge news lists, newest first, without duplicate or off-topic headlines
-function mergeNews(lists, max) {
+// Merge news lists, newest first, without duplicate (or, for tech/job news, off-topic) headlines
+function mergeNews(lists, max, { offTopic = true } = {}) {
   const seen = new Set();
   return lists.flat()
-    .filter(n => !OFF_TOPIC.test(n.title) && !PRESS_RELEASE.test(n.source))
+    .filter(n => (!offTopic || !OFF_TOPIC.test(n.title)) && !PRESS_RELEASE.test(n.source))
     .filter(n => { const k = n.title.toLowerCase().slice(0, 60); if (seen.has(k)) return false; seen.add(k); return true; })
     .sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt))
     .slice(0, max);
@@ -193,6 +195,87 @@ async function walkIns(roles, city) {
     .slice(0, 8);
 }
 
+// ---- Government jobs: exam notifications, admit cards, results ----
+const NATIONAL_SITES = [
+  { name: 'UPSC', url: 'https://upsc.gov.in' },
+  { name: 'SSC', url: 'https://ssc.gov.in' },
+  { name: 'IBPS', url: 'https://www.ibps.in' },
+  { name: 'SBI Careers', url: 'https://sbi.co.in/web/careers' },
+  { name: 'RBI', url: 'https://opportunities.rbi.org.in' },
+  { name: 'Railways (RRB)', url: 'https://www.rrbapply.gov.in' },
+  { name: 'Indian Army', url: 'https://joinindianarmy.nic.in' },
+];
+
+// City → state recruitment boards (PSC and police), so local exams show up
+const STATES = [
+  { cities: /hyderabad|secunderabad|warangal|karimnagar|telangana/i, names: /telangana|tgpsc|tspsc|tgprb|tslprb|\bts\b|\btg\b/i, state: 'Telangana', query: '(TGPSC OR TSPSC OR TGPRB OR "Telangana police" OR "Telangana group" OR "TS group")', sites: [{ name: 'TGPSC', url: 'https://www.tgpsc.gov.in' }, { name: 'TG Police (TGPRB)', url: 'https://www.tgprb.in' }] },
+  { cities: /visakhapatnam|vizag|vijayawada|guntur|tirupati|andhra/i, names: /andhra|appsc|\bap\b|slprb/i, state: 'Andhra Pradesh', query: '(APPSC OR "AP police" OR "AP SLPRB" OR "Andhra Pradesh police")', sites: [{ name: 'APPSC', url: 'https://psc.ap.gov.in' }, { name: 'AP Police (SLPRB)', url: 'https://slprb.ap.gov.in' }] },
+  { cities: /bengaluru|bangalore|mysuru|mysore|mangaluru|karnataka/i, names: /karnataka|kpsc|\bksp\b|\bkea\b/i, state: 'Karnataka', query: '(KPSC OR "Karnataka police" OR KSP OR "KEA recruitment")', sites: [{ name: 'KPSC', url: 'https://kpsc.kar.nic.in' }] },
+  { cities: /chennai|coimbatore|madurai|tamil/i, names: /tamil|tnpsc|tnusrb|\btn\b/i, state: 'Tamil Nadu', query: '(TNPSC OR TNUSRB OR "Tamil Nadu police" OR "TN group")', sites: [{ name: 'TNPSC', url: 'https://www.tnpsc.gov.in' }, { name: 'TN Police (TNUSRB)', url: 'https://www.tnusrb.tn.gov.in' }] },
+  { cities: /pune|mumbai|nagpur|nashik|maharashtra/i, names: /maharashtra|mpsc|bharti/i, state: 'Maharashtra', query: '(MPSC OR "Maharashtra police" OR "police bharti")', sites: [{ name: 'MPSC', url: 'https://mpsc.gov.in' }] },
+  { cities: /noida|lucknow|kanpur|ghaziabad|varanasi|uttar pradesh/i, names: /uttar pradesh|uppsc|upsssc|\bup\b/i, state: 'Uttar Pradesh', query: '(UPPSC OR UPSSSC OR "UP police")', sites: [{ name: 'UPPSC', url: 'https://uppsc.up.nic.in' }] },
+  { cities: /gurugram|gurgaon|faridabad|haryana/i, names: /haryana|hpsc|hssc/i, state: 'Haryana', query: '(HPSC OR HSSC OR "Haryana police")', sites: [{ name: 'HPSC', url: 'https://hpsc.gov.in' }] },
+  { cities: /delhi/i, names: /delhi|dsssb/i, state: 'Delhi', query: '(DSSSB OR "Delhi police")', sites: [{ name: 'DSSSB', url: 'https://dsssb.delhi.gov.in' }] },
+];
+
+const GOVT_RELEVANT = /recruitment|notification|vacanc|exam|admit card|hall ticket|result|apply|posts|application|answer key|syllabus|cut ?off|selection list|merit list/i;
+const GOVT_CATEGORIES = [
+  ['Defence', /army|navy|air force|agniveer|\bnda\b|\bcds\b|afcat|crpf|bsf|cisf|itbp|\bssb\b|assam rifles|defence|coast guard/i],
+  ['Police', /police|constable|sub[- ]inspector|\bsi\b|\basi\b|slprb|tgprb|tnusrb|prb\b|home guard|jail warder/i],
+  ['Railways', /\brrb\b|railway|\brail\b|ntpc|alp\b/i],
+  ['Banks', /ibps|\bsbi\b|\brbi\b|bank|nabard|\blic\b|insurance|sebi/i],
+  ['Teaching', /teacher|\btet\b|\bdsc\b|\bkvs\b|\bnvs\b|lecturer|professor|ctet/i],
+  ['Group & PSC', /upsc|\bssc\b|psc\b|tgpsc|tspsc|appsc|tnpsc|kpsc|mpsc|uppsc|group[- ]?(1|2|3|4|i{1,3}|iv)\b|civil services|\bcgl\b|chsl|\bmts\b|\bias\b/i],
+];
+const GOVT_KIND = [
+  ['Notification', /notification|recruitment|apply|vacanc|posts|registration/i],
+  ['Admit card', /admit card|hall ticket|city intimation/i],
+  ['Result', /result|merit list|selection list|cut ?off/i],
+  ['Exam date', /exam date|schedule|exam city|timetable/i],
+  ['Answer key', /answer key/i],
+];
+
+export const stateFor = (city = '') => STATES.find(s => s.cities.test(city)) || null;
+
+async function governmentUpdates(city) {
+  const st = stateFor(city);
+  const lists = await Promise.all([
+    googleNews('(UPSC OR SSC OR "Group 1" OR "Group 2" OR "Group 4" OR PSC) (notification OR recruitment OR "admit card" OR result) when:7d', 8),
+    googleNews('(police OR constable OR "sub inspector") recruitment (notification OR exam OR result) when:7d', 8),
+    googleNews('(IBPS OR "SBI PO" OR "SBI Clerk" OR RBI) (recruitment OR notification OR exam OR result) when:7d', 8),
+    googleNews('(RRB OR "railway recruitment") (notification OR exam OR result) when:7d', 6),
+    googleNews('(Agniveer OR "Indian Army" OR "Indian Navy" OR "Air Force" OR CRPF OR BSF OR CISF) recruitment when:7d', 5),
+    googleNews('(teacher recruitment OR TET OR DSC OR KVS) (notification OR exam OR result) when:7d', 4),
+    st ? googleNews(`${st.query} (notification OR recruitment OR exam OR result OR "admit card") when:14d`, 10) : [],
+  ]);
+  // The state search is loose: keep (and tag) only headlines that name the state's boards
+  const local = new Set((lists[6] || []).filter(n => st?.names.test(n.title)).map(n => n.title));
+  if (st) lists[6] = lists[6].filter(n => local.has(n.title));
+  return mergeNews(lists.map(l => l.filter(n => GOVT_RELEVANT.test(n.title))), 40, { offTopic: false }).map(n => ({
+    ...n,
+    category: (GOVT_CATEGORIES.find(([, re]) => re.test(n.title)) || ['Other'])[0],
+    kind: (GOVT_KIND.find(([, re]) => re.test(n.title)) || [null])[0],
+    local: local.has(n.title) ? st.state : null,
+  }))
+    // Only actual job updates (notification, admit card, result, exam date, answer key), not general news
+    .filter(n => n.kind)
+    .slice(0, 30);
+}
+
+// ---- Trending jobs: popular roles ranked by new openings today in the city ----
+const TRENDING_ROLES = [
+  'Software Engineer', 'Data Analyst', 'Full Stack Developer', 'Java Developer', 'Python Developer', 'DevOps Engineer',
+  'QA Engineer', 'Business Analyst', 'Data Scientist', 'Sales Executive', 'Customer Support', 'HR Recruiter', 'Accountant', 'Digital Marketing',
+];
+
+async function trendingJobs(place) {
+  const rows = await Promise.all(TRENDING_ROLES.map(async (role) => ({ role, today: await openingsCount(role, place, 'r86400') })));
+  return rows.filter(r => r.today?.value)
+    .sort((a, b) => b.today.value - a.today.value)
+    .slice(0, 12)
+    .map(r => ({ ...r, url: `https://www.linkedin.com/jobs/search?keywords=${encodeURIComponent(r.role)}&location=${encodeURIComponent(place)}&f_TPR=r86400` }));
+}
+
 // ---- Market pulse (AI summary of the headlines only) ----
 async function marketPulse(news, openings, city) {
   if (!hasLLM() || !news.length) return null;
@@ -219,7 +302,8 @@ async function marketPulse(news, openings, city) {
 
 async function build(city, roles) {
   const place = city || 'India';
-  const [jobNewsLists, techLists, openings, companies, walkInList] = await Promise.all([
+  const st = stateFor(place);
+  const [jobNewsLists, techLists, openings, companies, walkInList, government, trending] = await Promise.all([
     Promise.all([
       googleNews('(IT hiring OR tech jobs OR job market) India when:7d', 10),
       googleNews('(layoffs OR hiring freeze) tech India when:7d', 6),
@@ -232,21 +316,24 @@ async function build(city, roles) {
     Promise.all(roles.map(async (role) => ({ role, today: await openingsCount(role, place, 'r86400'), week: await openingsCount(role, place, 'r604800') }))),
     hiringCompanies(roles, place),
     walkIns(roles, place),
+    governmentUpdates(place),
+    trendingJobs(place),
   ]);
   // Job news must be about India or tech work
   const relevant = /india|indian|bengaluru|bangalore|hyderabad|pune|chennai|mumbai|delhi|noida|gurugram|kolkata|tcs|infosys|wipro|hcl|tech|\bit\b|software|\bai\b|layoff|hiring|freshers|startup|engineer/i;
   const jobNews = mergeNews(jobNewsLists.map(list => list.filter(n => relevant.test(n.title))), 12);
-  const techNews = mergeNews(techLists, 12);
   return {
     city: place,
     roles,
     updatedAt: new Date().toISOString(),
     pulse: await marketPulse(jobNews, openings, place),
+    government: { state: st?.state || null, updates: government, sites: [...(st?.sites || []), ...NATIONAL_SITES] },
+    trending,
     openings,
     companies,
     walkIns: walkInList,
     jobNews,
-    techNews,
+    techNews: mergeNews(techLists, 12),
   };
 }
 
@@ -261,7 +348,7 @@ export async function getMarketInsights({ location = '', roles = [], refresh = f
   if (hit?.data && !refresh && Date.now() - hit.at < TTL_MS) return hit.data;
   const pending = build(city, roleList)
     .then((data) => {
-      const partial = !data.walkIns.length || !data.companies.length || data.openings.some(o => !o.today || !o.week);
+      const partial = !data.walkIns.length || !data.companies.length || !data.trending.length || !data.government.updates.length || data.openings.some(o => !o.today || !o.week);
       // Partial results expire sooner so a rate-limited section fills in on the next visit
       cache.set(key, { at: Date.now() - (partial ? TTL_MS - PARTIAL_TTL_MS : 0), data });
       return data;
