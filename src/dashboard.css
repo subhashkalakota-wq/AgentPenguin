@@ -3812,3 +3812,37 @@
   .pg-pp-overall-score strong { font-size: 26px; }
   .pg-pp-tabs button { padding: 8px 8px; font-size: 12.5px; }
 }
+
+/* Tests in full screen (browser full screen, or filling the window where that isn't available) */
+.pg-test-shell.is-full { background: var(--bg-app); overflow-y: auto; padding: 28px 24px 40px; }
+.pg-test-shell.is-max { position: fixed; inset: 0; z-index: 3000; }
+.pg-test-shell.is-full > .pg-mock-card { max-width: 1040px; margin: 0 auto; background: var(--bg-card); border: 1px solid var(--border-primary); }
+.pg-test-shell.is-full .pg-test-q { font-size: 18px; line-height: 1.55; }
+.pg-test-shell.is-full .pg-rq-option { font-size: 15px; }
+.pg-test-bar-right { display: inline-flex; align-items: center; gap: 10px; margin-left: auto; }
+.pg-test-fs { height: 30px; padding: 0 10px; font-size: 12.5px; }
+.pg-mock-start-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pg-mock-result-head .pg-test-fs { margin-left: auto; }
+
+/* Coding problems from LeetCode / CodeChef / Codeforces */
+.pg-cp { display: grid; gap: 10px; margin-top: 10px; padding: 12px 14px; border: 1px solid var(--border-primary); background: var(--bg-card); }
+.pg-cp-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.pg-cp-title { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 700; color: var(--text-primary); }
+.pg-cp-title svg { color: var(--pg-sage-deep); }
+.pg-cp-head .pg-chip { height: 26px; padding: 0 10px; font-size: 12px; }
+.pg-cp-note { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 12.5px; color: var(--text-muted); }
+.pg-cp-sites { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 10px; }
+.pg-cp-site { display: grid; align-content: start; gap: 6px; padding: 10px 12px; background: var(--bg-inset); min-width: 0; }
+.pg-cp-site-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pg-cp-site-head strong { font-size: 13px; color: var(--text-primary); }
+.pg-cp-site-head a { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; font-weight: 600; color: var(--pg-sage-deep); text-decoration: none; }
+.pg-cp-site-head a:hover { text-decoration: underline; }
+.pg-cp-site ol { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+.pg-cp-site li { font-size: 13px; color: var(--text-muted); min-width: 0; }
+.pg-cp-site li a { display: block; color: var(--text-primary); text-decoration: none; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pg-cp-site li a:hover { text-decoration: underline; }
+.pg-cp-meta { display: block; font-size: 11.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pg-cp-empty { margin: 0; font-size: 12.5px; color: var(--text-muted); }
+.pg-pp-linkbtn { display: inline-flex; align-items: center; gap: 5px; margin-left: 8px; padding: 0; border: 0; background: none; font-size: 12.5px; font-weight: 600; color: var(--pg-sage-deep); cursor: pointer; }
+.pg-pp-linkbtn:hover { text-decoration: underline; }
+.pg-pp-test-modal .pg-cp, .pg-mock-card .pg-cp { margin-top: 0; }

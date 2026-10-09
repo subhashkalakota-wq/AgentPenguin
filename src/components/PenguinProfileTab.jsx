@@ -5,6 +5,8 @@ import {
 } from 'lucide-react';
 import { SKILL_CATALOG, ALL_SKILLS, levelFromScore, ratingFromScore } from '../../shared/skillsCatalog';
 import { learnLinksFor } from '../data/learningResources';
+import { isCodingTopic, practiceLevel } from '../../shared/codingTopics';
+import CodingPractice from './CodingPractice';
 import { PenguinTest, Segmented } from './MocksTab';
 import { Donut, Legend, BarList, Columns, TrendLine } from './charts';
 import { authFetch } from '../lib/api';
@@ -319,6 +321,7 @@ function skillScores(skills, levels) {
 function SkillReport({ skills, levels, onTestAll, onTestOne, onOpenVisoDsa }) {
   const { tested, overall, rating } = skillScores(skills, levels);
   const untested = skills.filter(s => levels[s]?.source !== 'test');
+  const [practice, setPractice] = useState({}); // which skills show coding problems
   const strong = tested.filter(t => t.score >= 70).map(t => t.skill);
   const weak = tested.filter(t => t.score < 55).map(t => t.skill);
 
@@ -361,8 +364,14 @@ function SkillReport({ skills, levels, onTestAll, onTestOne, onOpenVisoDsa }) {
                 <p className="pg-pp-rep-msg">
                   {RATING_LINE[t.rating.tone](t.skill)}
                   {t.total ? ` ${t.correct} of ${t.total} right.` : ''}
+                  {isCodingTopic(t.skill) && (
+                    <button type="button" className="pg-pp-linkbtn" aria-expanded={Boolean(practice[t.skill])} onClick={() => setPractice(p => ({ ...p, [t.skill]: !p[t.skill] }))}>
+                      <Code2 size={13} /> {practice[t.skill] ? 'Hide coding problems' : 'Coding problems on LeetCode, CodeChef & Codeforces'}
+                    </button>
+                  )}
                 </p>
                 {t.score < 70 && <LearnLinks skill={t.skill} onOpenVisoDsa={onOpenVisoDsa} />}
+                {practice[t.skill] && <CodingPractice topic={t.skill} level={practiceLevel(t.score)} />}
               </li>
             ))}
           </ul>

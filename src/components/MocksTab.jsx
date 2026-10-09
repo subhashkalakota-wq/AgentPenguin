@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   MessagesSquare, ClipboardCheck, Globe2, Loader2, Mic, MicOff, Volume2, Send, ArrowRight, RotateCcw, CheckCircle2, XCircle,
-  AlertTriangle, ExternalLink, Timer, Flag, ChevronLeft, ChevronRight, Trophy,
+  AlertTriangle, ExternalLink, Timer, Flag, ChevronLeft, ChevronRight, Trophy, Maximize2, Minimize2,
 } from 'lucide-react';
 import { MOCK_INTERVIEW_SITES, MOCK_TEST_SITES, TEST_TOPICS } from '../data/mockResources';
+import { isCodingTopic, practiceLevel } from '../../shared/codingTopics';
+import CodingPractice from './CodingPractice';
 
 const API = 'http://localhost:3001';
 const KINDS = [['technical', 'Technical'], ['hr', 'HR'], ['behavioral', 'Behavioural'], ['system-design', 'System design']];
@@ -241,7 +243,48 @@ function PenguinInterview({ roles, prefill }) {
  * whose questions carry a `skill`). `onComplete({ correct, total, pct, questions, answers })`
  * reports the result so skill levels update; `doneHint` is shown next to Done.
  */
-export function PenguinTest({ roles = [], prefill, fixedTopic, initialTest, doneHint, onComplete, onCancel }) {
+export function PenguinTest(props) {
+  const shellRef = useRef(null);
+  const [full, setFull] = useState(false); // browser full screen
+  const [max, setMax] = useState(false); // fallback where full screen isn't available: fill the window
+
+  useEffect(() => {
+    const el = shellRef.current;
+    const sync = () => setFull(Boolean(el) && document.fullscreenElement === el);
+    const onKey = (e) => { if (e.key === 'Escape') setMax(false); };
+    document.addEventListener('fullscreenchange', sync);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('fullscreenchange', sync);
+      document.removeEventListener('keydown', onKey);
+      if (el && document.fullscreenElement === el) document.exitFullscreen().catch(() => {});
+    };
+  }, []);
+
+  const toggle = () => {
+    if (full) { document.exitFullscreen().catch(() => {}); return; }
+    if (max) { setMax(false); return; }
+    const el = shellRef.current;
+    if (el?.requestFullscreen) el.requestFullscreen().catch(() => setMax(true));
+    else setMax(true);
+  };
+
+  return (
+    <div ref={shellRef} className={`pg-test-shell ${full || max ? 'is-full' : ''} ${max ? 'is-max' : ''}`}>
+      <TestBody {...props} fullScreen={full || max} onToggleFullScreen={toggle} />
+    </div>
+  );
+}
+
+function FullScreenButton({ on, onToggle }) {
+  return (
+    <button type="button" className="pg-btn pg-test-fs" onClick={onToggle} aria-pressed={on} title={on ? 'Exit full screen (Esc)' : 'Take the test in full screen'}>
+      {on ? <Minimize2 size={14} /> : <Maximize2 size={14} />} {on ? 'Exit full screen' : 'Full screen'}
+    </button>
+  );
+}
+
+function TestBody({ roles = [], prefill, fixedTopic, initialTest, doneHint, onComplete, onCancel, fullScreen, onToggleFullScreen }) {
   const [topic, setTopic] = useState(fixedTopic || prefill?.role ? '__custom' : 'Quantitative aptitude');
   const [custom, setCustom] = useState(fixedTopic || (prefill?.role ? `${prefill.role} (assessment${prefill.company ? ` for ${prefill.company}` : ''})` : ''));
   const [level, setLevel] = useState('medium');
@@ -303,6 +346,7 @@ export function PenguinTest({ roles = [], prefill, fixedTopic, initialTest, done
         {error && <p className="pg-rq-message is-error"><AlertTriangle size={14} /> {error}</p>}
         <div className="pg-mock-answer-bar">
           {onCancel && <button type="button" className="pg-btn" onClick={onCancel}>Cancel</button>}
+          <FullScreenButton on={fullScreen} onToggle={onToggleFullScreen} />
           <button type="button" className="pg-btn pg-btn-primary" onClick={start} disabled={busy}>
             {busy ? <><Loader2 size={15} className="pg-spin" /> Writing your test…</> : <><ClipboardCheck size={15} /> Start {count}-question test · {count} min</>}
           </button>
@@ -333,9 +377,12 @@ export function PenguinTest({ roles = [], prefill, fixedTopic, initialTest, done
           <div className="pg-mock-row"><span>Questions</span><Segmented value={String(count)} onChange={(v) => setCount(Number(v))} options={[['10', '10'], ['15', '15'], ['20', '20']]} label="Questions" /></div>
         </div>
         {error && <p className="pg-rq-message is-error"><AlertTriangle size={14} /> {error}</p>}
-        <button type="button" className="pg-btn pg-btn-primary pg-mock-start" onClick={start} disabled={busy || (topic === '__custom' && !custom.trim())}>
-          {busy ? <><Loader2 size={15} className="pg-spin" /> Writing your test…</> : <><ClipboardCheck size={15} /> Start {count}-question test · {count} min</>}
-        </button>
+        <div className="pg-mock-start-row">
+          <button type="button" className="pg-btn pg-btn-primary pg-mock-start" onClick={start} disabled={busy || (topic === '__custom' && !custom.trim())}>
+            {busy ? <><Loader2 size={15} className="pg-spin" /> Writing your test…</> : <><ClipboardCheck size={15} /> Start {count}-question test · {count} min</>}
+          </button>
+          <FullScreenButton on={fullScreen} onToggle={onToggleFullScreen} />
+        </div>
         <p className="pg-auto-small">Questions are written by AI and checked automatically, but read the explanations if an answer looks wrong.</p>
       </section>
     );
@@ -343,6 +390,8 @@ export function PenguinTest({ roles = [], prefill, fixedTopic, initialTest, done
 
   if (result) {
     const pct = Math.round((result.correct / result.total) * 100);
+    const skillsInTest = new Set(test.questions.map(q => q.skill).filter(Boolean));
+    const practiceTopic = skillsInTest.size > 1 ? null : ([...skillsInTest][0] || fixedTopic || test.topic);
     return (
       <section className="pg-card pg-mock-card">
         <div className="pg-mock-result-head">
@@ -352,7 +401,9 @@ export function PenguinTest({ roles = [], prefill, fixedTopic, initialTest, done
             <h2 className="pg-mock-h">{test.topic}{test.level ? ` · ${test.level}` : ''}</h2>
             <p className="pg-mock-sub">Finished in {Math.floor(result.seconds / 60)}m {result.seconds % 60}s</p>
           </div>
+          {fullScreen && <FullScreenButton on={fullScreen} onToggle={onToggleFullScreen} />}
         </div>
+        {practiceTopic && isCodingTopic(practiceTopic) && <CodingPractice topic={practiceTopic} level={practiceLevel(pct)} />}
         <ol className="pg-test-review">
           {test.questions.map((q, i) => {
             const mine = answers[i];
@@ -379,7 +430,10 @@ export function PenguinTest({ roles = [], prefill, fixedTopic, initialTest, done
     <section className="pg-card pg-mock-card">
       <div className="pg-mock-progress">
         <span>{q.skill || test.topic} · Question {idx + 1} of {test.questions.length}</span>
-        <span className={`pg-test-timer ${left < 60 ? 'is-low' : ''}`}><Timer size={14} /> {Math.floor(left / 60)}:{String(left % 60).padStart(2, '0')}</span>
+        <span className="pg-test-bar-right">
+          <span className={`pg-test-timer ${left < 60 ? 'is-low' : ''}`}><Timer size={14} /> {Math.floor(left / 60)}:{String(left % 60).padStart(2, '0')}</span>
+          <FullScreenButton on={fullScreen} onToggle={onToggleFullScreen} />
+        </span>
       </div>
       <div className="pg-test-layout">
         <div>

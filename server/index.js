@@ -17,6 +17,7 @@ import { applyNaukriJob, applyIndeedJob } from './boardAppliers.js';
 import { createInbox, inboxSettings, updateInboxSettings } from './inbox.js';
 import { analyzeCodingProfiles } from './codingProfiles.js';
 import { suggestRoles } from './careerAdvisor.js';
+import { practiceProblems } from './practiceProblems.js';
 import { emailAccount } from './notifier.js';
 import { nextInterviewQuestion, evaluateAnswer, interviewSummary, generateTest } from './mocks.js';
 import { filterJobsWithLLM } from './llmFilter.js';
@@ -961,6 +962,15 @@ app.post('/api/career/suggest', async (req, res) => {
       location: b.location || searchLocations(config)[0] || candidateProfile.location || '',
       experienceYears: candidateProfile.resumeAnalysis?.totalExperienceYears ?? candidateProfile.experienceYears ?? null,
     }));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Coding problems (LeetCode / CodeChef / Codeforces) for a DSA or programming-language topic
+app.get('/api/practice', async (req, res) => {
+  try {
+    res.json(await practiceProblems(String(req.query.topic || ''), String(req.query.level || 'medium')));
   } catch (err) {
     res.status(400).json({ error: err.message });
   }

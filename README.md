@@ -393,7 +393,9 @@ Channel setup:
   - CS fundamentals: data structures and algorithms, OOP, DBMS, operating systems, networks;
   - any custom topic.
 - A question palette shows which questions are answered and lets you jump between them; **Mark for review**; a countdown timer.
+- **Full screen.** A **Full screen** button (on the setup screen and next to the timer) puts the test in your browser's full screen, like a real online exam. **Esc** or **Exit full screen** leaves it. Browsers without full-screen support fill the window instead.
 - At the end: your score and a full review with explanations.
+- **Coding problems.** After a test on a DSA topic or a programming language, the results show problems to practise from **LeetCode, CodeChef and Codeforces** (see [Coding problems](#coding-problems)).
 
 **Real mocks.** Links to live mock interview sites (Pramp, interviewing.io, Preplaced, Topmate, InterviewBit and more) and mock test and contest sites (PrepInsta TCS NQT, IndiaBIX, GeeksforGeeks, HackerRank, LeetCode, Codeforces, Unstop, HackerEarth).
 
@@ -421,10 +423,18 @@ For people who aren't sure which role to aim for. Two sections in the sidebar:
   - **Excellent** (90%+), **Very good** (70%+), **Good** (55%+), **Average** (40%+), **Poor** (below 40%);
   - one line per skill, e.g. "You're excellent at React." or "You're poor at SQL right now. Start with the basics below, then retest.";
   - the score also sets the skill's level (90%+ Expert, 70%+ Advanced, 40%+ Intermediate, otherwise Beginner), which a guess from the resume or coding profiles never overwrites.
+- **Full screen** works in the Skill Test exactly as in Mocks.
 - **Learn what you missed.** Every skill under 70% gets learning links:
   - **DSA** skills (data structures, algorithms, competitive programming) open **Viso DSA**, Agent Penguin's own visual DSA platform;
   - other skills link to the best-known free resource (e.g. react.dev, SQLBolt, javascript.info, Kaggle Learn, AWS Skill Builder) plus video courses;
   - the links live in [src/data/learningResources.js](src/data/learningResources.js).
+- <a id="coding-problems"></a>**Coding problems.** DSA and programming-language skills in the report (and DSA or language tests in Mocks) get problems to practise:
+  - **LeetCode, CodeChef and Codeforces**, six each, every one linking to the problem;
+  - the difficulty starts where your score puts you (below 55% easy, 55–89% medium, 90%+ hard), and **Easy / Medium / Hard** switches it;
+  - **DSA topics** use matching tags, e.g. Graphs → graph, BFS/DFS and shortest-path problems; a broad "DSA" topic mixes arrays, hashing, two pointers, binary search, DP, graphs, trees and greedy;
+  - **languages** (Java, Python, C/C++, Go, …) get general problems to solve in that language, and JavaScript/TypeScript also get LeetCode's 30 Days of JavaScript;
+  - **SQL, shell and pandas** come from LeetCode's own sets, because the other sites don't have them;
+  - CodeChef and Codeforces problems are the most-solved ones in the band; the picks change daily, and **More** opens the full list on each site.
 - **Coding profiles.** Paste LeetCode, Codeforces, CodeChef and GitHub links or usernames, then click **Analyse**:
   - **LeetCode:**
     - pie chart of Easy / Medium / Hard solved;
@@ -463,6 +473,8 @@ For people who aren't sure which role to aim for. Two sections in the sidebar:
 
 **Files:**
 - [src/data/learningResources.js](src/data/learningResources.js)
+- [shared/codingTopics.js](shared/codingTopics.js) and [server/practiceProblems.js](server/practiceProblems.js) (coding problems)
+- [src/components/CodingPractice.jsx](src/components/CodingPractice.jsx)
 - [server/codingProfiles.js](server/codingProfiles.js)
 - [server/careerAdvisor.js](server/careerAdvisor.js)
 - [shared/skillsCatalog.js](shared/skillsCatalog.js)
@@ -521,7 +533,7 @@ A separate console at **`/admin`** with its own sign-in (email or Google). Only 
 | Documents | `pdf-parse`, `mammoth` (resume text), `jspdf` + `jspdf-autotable` (PDF export) |
 | Email | `imapflow`, `mailparser` (reading), `nodemailer` (sending) |
 | Alerts | Telegram Bot API, CallMeBot (WhatsApp), SMTP |
-| Public data | LinkedIn public job pages, Google News RSS, Hacker News, LeetCode GraphQL, Codeforces API, CodeChef profile pages, GitHub REST API |
+| Public data | LinkedIn public job pages, Google News RSS, Hacker News, LeetCode GraphQL, Codeforces API, CodeChef profile pages and practice API, GitHub REST API |
 | Quality | oxlint |
 
 ---
@@ -547,6 +559,7 @@ server/
   mocks.js              AI mock interviews and tests
   codingProfiles.js     LeetCode / Codeforces / CodeChef / GitHub analysis
   careerAdvisor.js      Role suggestions from skills
+  practiceProblems.js   LeetCode / CodeChef / Codeforces problems for a topic
   admin.js              Admin API
   cdpClient.js          Finds and connects to your Chrome
   cdpBridge.js          Background process that keeps Chrome's approval
@@ -555,7 +568,8 @@ server/
   data/                 Local data (git-ignored): state, alerts, logs, resume analysis
 shared/                 Code used by both server and dashboard
   screeningQuestions.js Common application questions
-  skillsCatalog.js      Skills catalog and test-score levels
+  skillsCatalog.js      Skills catalog, test-score levels and ratings
+  codingTopics.js       Which topics get coding problems, and their tags
   locations.js          Location helpers
 src/
   App.jsx               Routing, tabs, run controls, live events
@@ -586,7 +600,7 @@ All endpoints are on `http://localhost:3001`.
 | Automation | `GET /api/automation`, `POST /api/automation/schedule`, `POST /api/alerts/settings`, `POST /api/alerts/test`, `POST /api/alerts/telegram/detect` |
 | Inbox | `GET /api/inbox`, `POST /api/inbox/settings`, `POST /api/inbox/check`, `POST /api/followup/draft`, `POST /api/followup/send`, `POST /api/followup/skip` |
 | Mocks | `POST /api/mock/interview/question`, `POST /api/mock/interview/evaluate`, `POST /api/mock/interview/summary`, `POST /api/mock/test` |
-| Penguin Profile and Skill Test | `POST /api/coding/analyze`, `POST /api/career/suggest`, `POST /api/mock/test` |
+| Penguin Profile and Skill Test | `POST /api/coding/analyze`, `POST /api/career/suggest`, `POST /api/mock/test`, `GET /api/practice?topic=&level=` |
 | Penguin AI | `POST /api/chat` |
 | Admin | `GET /api/me`, `GET /api/admin/overview`, `GET /api/admin/users`, `GET /api/admin/users/:id`, `POST /api/admin/users/:id/block`, `POST /api/admin/users/:id/role`, `DELETE /api/admin/users/:id`, `GET /api/admin/applications`, `DELETE /api/admin/applications/:id`, `GET /api/admin/system`, `POST /api/admin/agent/stop` |
 
