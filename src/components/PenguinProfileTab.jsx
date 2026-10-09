@@ -1,13 +1,14 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Sparkles, Search, Plus, X, Check, ClipboardCheck, Loader2, AlertTriangle, RefreshCw, ExternalLink, Star, GitFork,
-  Trophy, Code2, FolderGit2, Target, Play, BadgeCheck,
+  Trophy, Code2, FolderGit2, Target, Play, BadgeCheck, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { SKILL_CATALOG, ALL_SKILLS, levelFromScore } from '../../shared/skillsCatalog';
 import { PenguinTest } from './MocksTab';
 import { Donut, Legend, BarList, Columns, TrendLine } from './charts';
 import { authFetch } from '../lib/api';
 
+const FOLD_KEY = 'pg_pp_collapsed';
 const LEVEL_RANK = { Beginner: 1, Intermediate: 2, Advanced: 3, Expert: 4 };
 const SOURCE_LABEL = { test: 'Tested', coding: 'From coding profiles', resume: 'From resume', self: 'Added by you' };
 
@@ -45,6 +46,33 @@ function LevelBadge({ info }) {
   );
 }
 
+// Which boxes are hidden ({ id: true }), shared by every Box on the page
+const FoldContext = createContext({ closed: () => false, toggle: () => {} });
+
+/**
+ * A Penguin Profile card with the same arrow + Hide / Show button as the Job market box.
+ * `actions` stay in the title row when hidden; `openActions` only show when open.
+ */
+function Box({ id, icon: Icon, title, actions, openActions, className = 'pg-pp-card', children }) {
+  const fold = useContext(FoldContext);
+  const closed = fold.closed(id);
+  return (
+    <section className={`pg-card ${className} ${closed ? 'is-collapsed' : ''}`}>
+      <div className="pg-mk-title pg-pp-head">
+        <Icon size={16} /><h3>{title}</h3>
+        <div className="pg-pp-head-actions">
+          {actions}
+          {!closed && openActions}
+          <button type="button" className="pg-btn pg-pp-toggle" onClick={() => fold.toggle(id)} aria-expanded={!closed} aria-controls={`pp-box-${id}`} aria-label={`${closed ? 'Show' : 'Hide'} ${title}`}>
+            {closed ? <><ChevronDown size={14} /> Show</> : <><ChevronUp size={14} /> Hide</>}
+          </button>
+        </div>
+      </div>
+      {!closed && <div id={`pp-box-${id}`}>{children}</div>}
+    </section>
+  );
+}
+
 // ---------------- Skills ----------------
 function SkillsCard({ skills, levels, onChange, onTest, suggestions }) {
   const [query, setQuery] = useState('');
@@ -58,8 +86,7 @@ function SkillsCard({ skills, levels, onChange, onTest, suggestions }) {
   const addCustom = () => { const v = query.trim(); if (v && !has(v)) onChange([...skills, v], { [v]: { level: null, source: 'self' } }); setQuery(''); };
 
   return (
-    <section className="pg-card pg-pp-card">
-      <div className="pg-mk-title"><Sparkles size={16} /><h3>Your skills</h3><span className="pg-mk-sub">{skills.length} selected</span></div>
+    <Box id="skills" icon={Sparkles} title="Your skills" actions={<span className="pg-mk-sub">{skills.length} selected</span>}>
       {skills.length === 0 && <p className="pg-mk-empty">Pick your skills below. Penguin suggests roles from them and answers application questions with them.</p>}
       <ul className="pg-pp-skills">
         {skills.map(s => {
@@ -119,7 +146,7 @@ function SkillsCard({ skills, levels, onChange, onTest, suggestions }) {
           {q && visible.length === 0 && <span className="pg-mk-empty">Not in the list — press Enter to add it.</span>}
         </div>
       </div>
-    </section>
+    </Box>
   );
 }
 
@@ -138,8 +165,7 @@ function LeetCodePanel({ lc }) {
     { label: 'Hard', value: lc.solved.hard, color: 'var(--viz-seq-3)' },
   ];
   return (
-    <section className="pg-card pg-pp-site">
-      <div className="pg-mk-title"><Code2 size={16} /><h3>LeetCode</h3><a className="pg-mk-sub" href={lc.url} target="_blank" rel="noreferrer">@{lc.username} <ExternalLink size={11} /></a></div>
+    <Box id="leetcode" className="pg-pp-site" icon={Code2} title="LeetCode" actions={<a className="pg-mk-sub" href={lc.url} target="_blank" rel="noreferrer">@{lc.username} <ExternalLink size={11} /></a>}>
       <div className="pg-pp-donut-row">
         <Donut segments={seg} centerValue={lc.solved.all} centerLabel="solved" ariaLabel={`LeetCode problems solved: ${lc.solved.easy} easy, ${lc.solved.medium} medium, ${lc.solved.hard} hard`} />
         <div>
@@ -153,14 +179,13 @@ function LeetCodePanel({ lc }) {
       </div>
       {lc.topics.length > 0 && (<><h4 className="pg-pp-h4">Problems solved by topic</h4><BarList items={lc.topics.slice(0, 10).map(t => ({ label: t.name, value: t.solved }))} ariaLabel="LeetCode problems solved by topic" /></>)}
       {lc.languages.length > 0 && <p className="pg-pp-note">Languages: {lc.languages.map(l => `${l.name} (${l.solved})`).join(', ')}</p>}
-    </section>
+    </Box>
   );
 }
 
 function CodeforcesPanel({ cf }) {
   return (
-    <section className="pg-card pg-pp-site">
-      <div className="pg-mk-title"><Trophy size={16} /><h3>Codeforces</h3><a className="pg-mk-sub" href={cf.url} target="_blank" rel="noreferrer">@{cf.handle} <ExternalLink size={11} /></a></div>
+    <Box id="codeforces" className="pg-pp-site" icon={Trophy} title="Codeforces" actions={<a className="pg-mk-sub" href={cf.url} target="_blank" rel="noreferrer">@{cf.handle} <ExternalLink size={11} /></a>}>
       <div className="pg-pp-tiles">
         <Tile label="Rating" value={cf.rating} sub={cf.rank} />
         <Tile label="Max rating" value={cf.maxRating} sub={cf.maxRank} />
@@ -170,14 +195,13 @@ function CodeforcesPanel({ cf }) {
       {cf.ratingHistory?.length > 1 && (<><h4 className="pg-pp-h4">Rating over recent contests</h4><TrendLine points={cf.ratingHistory.map(r => ({ at: new Date(r.at).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }), value: r.rating }))} ariaLabel="Codeforces rating history" /></>)}
       {cf.byRating?.length > 0 && (<><h4 className="pg-pp-h4">Problems solved by difficulty rating</h4><Columns items={cf.byRating.map(r => ({ label: String(r.rating), value: r.solved }))} xLabel="Rating" ariaLabel="Codeforces problems solved by rating" /></>)}
       {cf.topics?.length > 0 && (<><h4 className="pg-pp-h4">Top tags</h4><BarList items={cf.topics.slice(0, 8).map(t => ({ label: t.name, value: t.solved }))} ariaLabel="Codeforces problems by tag" /></>)}
-    </section>
+    </Box>
   );
 }
 
 function CodeChefPanel({ cc }) {
   return (
-    <section className="pg-card pg-pp-site">
-      <div className="pg-mk-title"><Trophy size={16} /><h3>CodeChef</h3><a className="pg-mk-sub" href={cc.url} target="_blank" rel="noreferrer">@{cc.handle} <ExternalLink size={11} /></a></div>
+    <Box id="codechef" className="pg-pp-site" icon={Trophy} title="CodeChef" actions={<a className="pg-mk-sub" href={cc.url} target="_blank" rel="noreferrer">@{cc.handle} <ExternalLink size={11} /></a>}>
       <div className="pg-pp-tiles">
         <Tile label="Rating" value={cc.rating} sub={cc.stars ? `${cc.stars}★` : null} />
         <Tile label="Highest rating" value={cc.highest} />
@@ -185,7 +209,7 @@ function CodeChefPanel({ cc }) {
         <Tile label="Contests" value={cc.contests} />
         <Tile label="Global rank" value={cc.globalRank?.toLocaleString('en-IN')} />
       </div>
-    </section>
+    </Box>
   );
 }
 
@@ -194,8 +218,7 @@ const LANG_COLORS = ['var(--viz-cat-1)', 'var(--viz-cat-2)', 'var(--viz-cat-3)',
 function GitHubPanel({ gh }) {
   const seg = gh.languages.map((l, i) => ({ label: l.name, value: Math.round(l.share * 1000) / 10, color: l.name === 'Other' ? 'var(--viz-other)' : LANG_COLORS[i] }));
   return (
-    <section className="pg-card pg-pp-site pg-pp-github">
-      <div className="pg-mk-title"><FolderGit2 size={16} /><h3>GitHub</h3><a className="pg-mk-sub" href={gh.url} target="_blank" rel="noreferrer">@{gh.username} <ExternalLink size={11} /></a></div>
+    <Box id="github" className="pg-pp-site pg-pp-github" icon={FolderGit2} title="GitHub" actions={<a className="pg-mk-sub" href={gh.url} target="_blank" rel="noreferrer">@{gh.username} <ExternalLink size={11} /></a>}>
       <div className="pg-pp-tiles">
         <Tile label="Public repositories" value={gh.publicRepos?.toLocaleString('en-IN')} sub={`${gh.activeRepos90d} updated in the last 90 days`} />
         <Tile label="Stars earned" value={gh.stars?.toLocaleString('en-IN')} />
@@ -227,7 +250,7 @@ function GitHubPanel({ gh }) {
           </ul>
         </>
       )}
-    </section>
+    </Box>
   );
 }
 
@@ -235,12 +258,16 @@ function GitHubPanel({ gh }) {
 function RolesCard({ roles, city, myRoles, busy, error, onSuggest, onAdd, onRun, canSuggest }) {
   const mine = (t) => myRoles.some(r => r.toLowerCase() === t.toLowerCase());
   return (
-    <section className="pg-card pg-pp-card">
-      <div className="pg-mk-title"><Target size={16} /><h3>Roles that fit your skills</h3>
-        <button type="button" className="pg-btn pg-pp-suggest-btn" onClick={onSuggest} disabled={busy || !canSuggest}>
+    <Box
+      id="roles"
+      icon={Target}
+      title="Roles that fit your skills"
+      openActions={(
+        <button type="button" className="pg-btn" onClick={onSuggest} disabled={busy || !canSuggest}>
           {busy ? <Loader2 size={14} className="pg-spin" /> : <Sparkles size={14} />} {roles?.length ? 'Suggest again' : 'Suggest roles'}
         </button>
-      </div>
+      )}
+    >
       <p className="pg-pp-note">Not sure what to apply for? Penguin suggests roles from your skills, test scores, resume and coding profiles. Add the ones you like — Penguin applies to them on your next run.</p>
       {error && <p className="pg-rq-message is-error"><AlertTriangle size={14} /> {error}</p>}
       {!canSuggest && <p className="pg-mk-empty">Add a few skills first.</p>}
@@ -273,7 +300,7 @@ function RolesCard({ roles, city, myRoles, busy, error, onSuggest, onAdd, onRun,
       {roles?.some(r => mine(r.title)) && onRun && (
         <div className="pg-pp-run"><span>Penguin will apply to your roles on the next run.</span><button type="button" className="pg-btn pg-btn-primary" onClick={onRun}><Play size={13} /> Run Penguin</button></div>
       )}
-    </section>
+    </Box>
   );
 }
 
@@ -296,6 +323,11 @@ export default function PenguinProfileTab({ profile, onSaveProfile, config, onSa
   const [roles, setRoles] = useState(() => readLocal(ROLES_KEY));
   const [suggesting, setSuggesting] = useState(false);
   const [rolesError, setRolesError] = useState(null);
+  const [folded, setFolded] = useState(() => readLocal(FOLD_KEY) || {});
+  const fold = useMemo(() => ({
+    closed: (id) => Boolean(folded[id]),
+    toggle: (id) => setFolded(f => { const next = { ...f, [id]: !f[id] }; writeLocal(FOLD_KEY, next); return next; }),
+  }), [folded]);
   const saveTimer = useRef(null);
   const profileRef = useRef(profile);
   profileRef.current = profile;
@@ -395,7 +427,9 @@ export default function PenguinProfileTab({ profile, onSaveProfile, config, onSa
   const tested = Object.values(levels).filter(l => l?.source === 'test').length;
 
   return (
+    <FoldContext.Provider value={fold}>
     <div className="pg-pp">
+      <Box id="summary" className="pg-pp-site pg-pp-overview" icon={BadgeCheck} title="At a glance">
       <div className="pg-pp-tiles pg-pp-summary">
         <Tile label="Skills" value={skills.length} sub={`${tested} verified by a test`} />
         <Tile label="LeetCode solved" value={stats?.leetcode?.solved.all} sub={stats?.leetcode ? `${stats.leetcode.solved.hard} hard` : 'Not connected'} />
@@ -403,6 +437,7 @@ export default function PenguinProfileTab({ profile, onSaveProfile, config, onSa
         <Tile label="CodeChef rating" value={stats?.codechef?.rating} sub={stats?.codechef?.stars ? `${stats.codechef.stars}★` : 'Not connected'} />
         <Tile label="GitHub repos" value={stats?.github?.publicRepos?.toLocaleString('en-IN')} sub={stats?.github ? `${stats.github.stars.toLocaleString('en-IN')} stars` : 'Not connected'} />
       </div>
+      </Box>
 
       <SkillsCard skills={skills} levels={levels} onChange={changeSkills} onTest={setTesting} suggestions={suggestions} />
 
@@ -418,10 +453,12 @@ export default function PenguinProfileTab({ profile, onSaveProfile, config, onSa
         canSuggest={skills.length > 0}
       />
 
-      <section className="pg-card pg-pp-card">
-        <div className="pg-mk-title"><Code2 size={16} /><h3>Coding profiles</h3>
-          {stats?.fetchedAt && <span className="pg-mk-sub">Updated {new Date(stats.fetchedAt).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}</span>}
-        </div>
+      <Box
+        id="coding"
+        icon={Code2}
+        title="Coding profiles"
+        actions={stats?.fetchedAt && <span className="pg-mk-sub">Updated {new Date(stats.fetchedAt).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}</span>}
+      >
         <p className="pg-pp-note">Paste your profile links or usernames. Penguin reads public data only and turns it into charts and skill levels.</p>
         <div className="pg-pp-links">
           {SITES.map(([key, label, ph]) => (
@@ -437,7 +474,7 @@ export default function PenguinProfileTab({ profile, onSaveProfile, config, onSa
             {analysing ? <Loader2 size={14} className="pg-spin" /> : stats ? <RefreshCw size={14} /> : <Sparkles size={14} />} {stats ? 'Refresh analysis' : 'Analyse my profiles'}
           </button>
         </div>
-      </section>
+      </Box>
 
       {stats && (
         <div className="pg-pp-sites">
@@ -457,5 +494,6 @@ export default function PenguinProfileTab({ profile, onSaveProfile, config, onSa
         </div>
       )}
     </div>
+    </FoldContext.Provider>
   );
 }

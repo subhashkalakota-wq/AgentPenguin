@@ -3681,7 +3681,6 @@
 .pg-skilltest-setup { padding-right: 60px; }
 
 /* Roles */
-.pg-pp-suggest-btn { margin-left: auto; }
 .pg-pp-roles { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
 .pg-pp-roles > li { display: grid; gap: 8px; padding: 14px 16px; border: 1px solid var(--border-primary); }
 .pg-pp-roles p { margin: 0; font-size: 13px; line-height: 1.5; color: var(--text-secondary); }
@@ -3735,3 +3734,11 @@
 .pg-tab-error strong { font-size: 15px; color: var(--text-primary); }
 .pg-tab-error span { max-width: 520px; overflow-wrap: anywhere; }
 .pg-tab-error .pg-btn { margin-top: 10px; }
+
+/* Penguin Profile boxes: arrow + Hide / Show, same as the Job market box */
+.pg-pp-head { flex-wrap: wrap; row-gap: 8px; }
+.pg-pp-head-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.pg-pp-head-actions .pg-mk-sub { margin-left: 0; }
+.pg-pp-toggle { height: 30px; padding: 0 10px; font-size: 12.5px; }
+.pg-pp-card.is-collapsed .pg-pp-head, .pg-pp-site.is-collapsed .pg-pp-head { margin-bottom: 0; }
+.pg-pp-overview .pg-pp-summary .pg-stat { padding: 12px 14px; }
