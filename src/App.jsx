@@ -10,6 +10,7 @@ import MocksTab from './components/MocksTab';
 import AutomationTab from './components/AutomationTab';
 import InboxTab from './components/InboxTab';
 import PenguinProfileTab from './components/PenguinProfileTab';
+import TabErrorBoundary from './components/TabErrorBoundary';
 import ReviewFinishModal from './components/ReviewFinishModal';
 import { searchLocations } from '../shared/locations';
 import PenguinWelcome from './components/PenguinWelcome';
@@ -1033,7 +1034,9 @@ export default function App() {
           />
         )}
 
-        {renderTab()}
+        <TabErrorBoundary key={detailPageJob ? `detail-${detailPageJob.id}` : dashTab}>
+          {renderTab()}
+        </TabErrorBoundary>
       </main>
       </div>
 

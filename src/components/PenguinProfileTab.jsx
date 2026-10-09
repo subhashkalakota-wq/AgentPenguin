@@ -20,6 +20,9 @@ async function post(path, body) {
 const friendly = (e) => (e.message === 'Failed to fetch' ? 'Backend is not running. Start it with: npm run server' : e.message);
 const readLocal = (k) => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch { return null; } };
 const writeLocal = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage unavailable */ } };
+// Skills saved by older versions may be a comma list or { name } objects
+const asSkillList = (v) => (Array.isArray(v) ? v.map(x => (typeof x === 'string' ? x : x?.name)).filter(Boolean)
+  : typeof v === 'string' ? v.split(',').map(x => x.trim()).filter(Boolean) : []);
 const sameSkill = (a, b) => a.toLowerCase().replace(/[^a-z0-9+#]/g, '') === b.toLowerCase().replace(/[^a-z0-9+#]/g, '');
 
 function Tile({ label, value, sub }) {
@@ -283,8 +286,8 @@ export default function PenguinProfileTab({ profile, onSaveProfile, config, onSa
   // Coding stats and role suggestions are kept in this browser (per user), not in the profile
   const STATS_KEY = `pg_coding_stats_${currentUser?.id || 'local'}`;
   const ROLES_KEY = `pg_role_suggestions_${currentUser?.id || 'local'}`;
-  const [skills, setSkills] = useState(() => profile.skills || []);
-  const [levels, setLevels] = useState(() => profile.skillLevels || {});
+  const [skills, setSkills] = useState(() => asSkillList(profile.skills));
+  const [levels, setLevels] = useState(() => (profile.skillLevels && typeof profile.skillLevels === 'object' ? profile.skillLevels : {}));
   const [testing, setTesting] = useState(null);
   const [links, setLinks] = useState(() => ({ leetcode: '', codeforces: '', codechef: '', github: '', ...(profile.codingProfiles || {}) }));
   const [stats, setStats] = useState(() => readLocal(STATS_KEY));

@@ -77,7 +77,10 @@ export default function ApplicationDetailPage({ job, onBack }) {
     );
   }
 
-  const playwrightSteps = job.playwrightTrace || [
+  // The stored trace is a list of steps for older rows and an object (review reason,
+  // inbox updates) for newer ones; only a list can be drawn as steps
+  const trace = job.playwrightTrace;
+  const playwrightSteps = (Array.isArray(trace) && trace) || (Array.isArray(trace?.steps) && trace.steps) || [
     { step: 1, action: 'Navigated to listing via CDP', status: 'done', ts: '10:42:01' },
     { step: 2, action: "Clicked 'Easy Apply' modal trigger", status: 'done', ts: '10:42:03' },
     { step: 3, action: `Auto-filled contact info & email`, status: 'done', ts: '10:42:05' },

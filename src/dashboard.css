@@ -3729,3 +3729,9 @@
   .pg-barlist-row { grid-template-columns: minmax(70px, 38%) minmax(0, 1fr) 40px; gap: 8px; }
   .pg-pp-fit { width: 60px; }
 }
+
+/* A tab that crashed: message + reload, instead of a blank dashboard */
+.pg-tab-error svg { color: var(--status-danger); }
+.pg-tab-error strong { font-size: 15px; color: var(--text-primary); }
+.pg-tab-error span { max-width: 520px; overflow-wrap: anywhere; }
+.pg-tab-error .pg-btn { margin-top: 10px; }
