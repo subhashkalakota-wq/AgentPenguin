@@ -3846,3 +3846,12 @@
 .pg-pp-linkbtn { display: inline-flex; align-items: center; gap: 5px; margin-left: 8px; padding: 0; border: 0; background: none; font-size: 12.5px; font-weight: 600; color: var(--pg-sage-deep); cursor: pointer; }
 .pg-pp-linkbtn:hover { text-decoration: underline; }
 .pg-pp-test-modal .pg-cp, .pg-mock-card .pg-cp { margin-top: 0; }
+
+/* Skill report and roles: score range, what-if and learn next */
+.pg-pp-range { color: var(--text-muted); }
+.pg-pp-gap.is-test { cursor: pointer; background: var(--bg-card); color: var(--text-primary); border-style: solid; }
+.pg-pp-gap.is-test:hover { border-color: var(--pg-sage); }
+.pg-pp-gain { margin: 0; font-size: 12.5px; color: var(--text-secondary); }
+.pg-pp-learnnext { display: grid; gap: 6px; margin-top: 12px; padding: 10px 14px; background: var(--bg-inset); }
+.pg-pp-learnnext ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; font-size: 13px; color: var(--text-secondary); }
+.pg-pp-learnnext strong { color: var(--text-primary); }

@@ -36,13 +36,14 @@ Around the agent there is everything a job seeker needs in one place:
    - [Penguin AI and other tools](#16-penguin-ai-and-other-tools)
    - [Admin console](#17-admin-console)
    - [Look and feel](#18-look-and-feel)
-4. [Tech stack](#tech-stack)
-5. [Project structure](#project-structure)
-6. [API reference](#api-reference)
-7. [Where data is stored](#where-data-is-stored)
-8. [Environment variables](#environment-variables)
-9. [Safety and privacy](#safety-and-privacy)
-10. [Troubleshooting](#troubleshooting)
+4. [Algorithms](#algorithms)
+5. [Tech stack](#tech-stack)
+6. [Project structure](#project-structure)
+7. [API reference](#api-reference)
+8. [Where data is stored](#where-data-is-stored)
+9. [Environment variables](#environment-variables)
+10. [Safety and privacy](#safety-and-privacy)
+11. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -419,6 +420,7 @@ For people who aren't sure which role to aim for. Two sections in the sidebar:
   - every question is labelled with its skill, and the review at the end has explanations.
 
   Each skill can also be tested on its own with **Test** / **Retest**.
+- **Difficulty-aware scoring (Item Response Theory).** The test mixes easy, medium and hard questions (about 30/40/30), each labelled. Each skill's score is an *ability estimate* from the Rasch model (see [Algorithms](#algorithms)), not just % correct: the same number right on harder questions scores higher, and every score comes with a likely range and a High / Medium / Low confidence.
 - **Skill report.** Your score on each skill and overall, with a plain verdict:
   - **Excellent** (90%+), **Very good** (70%+), **Good** (55%+), **Average** (40%+), **Poor** (below 40%);
   - one line per skill, e.g. "You're excellent at React." or "You're poor at SQL right now. Start with the basics below, then retest.";
@@ -454,10 +456,12 @@ For people who aren't sure which role to aim for. Two sections in the sidebar:
     - top repositories;
     - an AI summary of the profile with three ways to make it stronger.
 - **Skill levels from coding.** Your DSA, competitive programming, language and Git levels are worked out from these numbers, with the evidence shown.
-- **Roles that fit your skills, based on your test.** After the test, the AI suggests 7 roles from how you scored (plus your resume and coding profiles):
-  - skills you scored 70%+ on count as strengths;
-  - skills under 40% are never the basis for a role and show up as things to learn;
-  - each role shows fit %, why it fits, the skills you have, up to 3 to learn, seniority, and live counts of new openings today and this week in your city.
+- **Roles that fit your skills, based on your test.** After the test, a role recommender (no AI, see [Algorithms](#algorithms)) ranks 43 roles from a role–skill knowledge base ([shared/roleCatalog.js](shared/roleCatalog.js)):
+  - each role shows its fit %, why it fits, the skills you have (with your test score), the biggest gaps, seniority, and live counts of new openings today and this week in your city;
+  - a what-if line says how much one skill would help, e.g. "Learning JavaScript to 70% would raise your fit to 60%";
+  - skills you listed but haven't tested show as **Test: …** buttons;
+  - **Learn next** lists the skills that would add the most fit across the suggested roles;
+  - no role is suggested on the strength of a skill under 40%.
 
   If your scores change, Penguin tells you to suggest again. Before any test, you can still suggest roles without one.
   **Add to my roles** puts a role into your search, and **Run Penguin** starts applying.
@@ -521,6 +525,22 @@ A separate console at **`/admin`** with its own sign-in (email or Google). Only 
 
 ---
 
+## Algorithms
+
+| Part | Algorithm | Where |
+|---|---|---|
+| Writing test questions | Large language model (Groq → OpenAI → Gemini fallback chain), questions labelled easy / medium / hard, checked against a fixed JSON format | [server/mocks.js](server/mocks.js), [server/llm.js](server/llm.js) |
+| Marking | Exact match against the answer key, grouped by skill | [src/components/MocksTab.jsx](src/components/MocksTab.jsx) |
+| Skill score | **Item Response Theory, Rasch model**: P(right) = 1 / (1 + e^−(θ − b)), with b = −1.2 / 0 / +1.2 for easy / medium / hard. Ability θ is the **Bayesian MAP estimate** (Normal(0, 2²) prior), solved with **Newton–Raphson**. Score = 100 × P(right on a medium question); range = θ ± 1 standard error | [shared/abilityScore.js](shared/abilityScore.js) |
+| Overall score | **Inverse-variance weighted mean** of θ across skills (weight = 1 / SE²) | [shared/abilityScore.js](shared/abilityScore.js) |
+| Levels and ratings | Threshold rules on the score (Expert 90+, Advanced 70+ …; Excellent 90+ … Poor < 40) | [shared/skillsCatalog.js](shared/skillsCatalog.js) |
+| Coding-profile analysis | De-duplication of solved problems, histograms by rating, frequency ranking of tags, share of code per language, threshold rules for levels | [server/codingProfiles.js](server/codingProfiles.js) |
+| Role suggestions | **Content-based recommendation** over a role–skill knowledge base. Proficiency p per skill (test score, or level × 0.85 if unverified). **Fit = core × (0.75 + 0.25 × support)**, where core = mean p of core skills and support = weighted mean p of the rest. **Gap analysis** by what-if (fit if a skill reached 70%). **Rank = 0.85 × fit + 0.15 × demand**, demand on a log scale from live LinkedIn openings. **Learn next** = fit gain summed across the suggested roles, weighted by fit | [server/careerAdvisor.js](server/careerAdvisor.js), [shared/roleCatalog.js](shared/roleCatalog.js) |
+| Practice problems | Filter by topic tags and difficulty band, rank by number of solvers, daily rotation by string hash, round-robin across tags | [server/practiceProblems.js](server/practiceProblems.js) |
+| Job matching during runs | AI relevance score 0–100 against the profile with a threshold (70% default); keyword-overlap scoring as the fallback | [server/llmFilter.js](server/llmFilter.js) |
+
+---
+
 ## Tech stack
 
 | Layer | Tools |
@@ -558,7 +578,7 @@ server/
   scheduler.js          Scheduled runs
   mocks.js              AI mock interviews and tests
   codingProfiles.js     LeetCode / Codeforces / CodeChef / GitHub analysis
-  careerAdvisor.js      Role suggestions from skills
+  careerAdvisor.js      Role recommender (weighted skill match, gaps, demand)
   practiceProblems.js   LeetCode / CodeChef / Codeforces problems for a topic
   admin.js              Admin API
   cdpClient.js          Finds and connects to your Chrome
@@ -570,6 +590,8 @@ shared/                 Code used by both server and dashboard
   screeningQuestions.js Common application questions
   skillsCatalog.js      Skills catalog, test-score levels and ratings
   codingTopics.js       Which topics get coding problems, and their tags
+  abilityScore.js       Item Response Theory scoring of skill tests
+  roleCatalog.js        Role–skill knowledge base for role suggestions
   locations.js          Location helpers
 src/
   App.jsx               Routing, tabs, run controls, live events
@@ -670,7 +692,7 @@ The frontend's public settings (Supabase URL, **anon** key, backend address) liv
 | A site isn't offered when starting a run | Open that site in a Chrome tab and sign in. Only open sites can be picked. |
 | "Backend is not running" | Start it with `npm run server`. |
 | Many jobs in Needs review with "Questions Penguin couldn't answer" | Finish them once. Penguin learns the answers and reuses them. Fill in Profile → Application questions too. |
-| Role suggestions, mocks or inbox say no AI is configured | Add `GROQ_API_KEY` (free), `OPENAI_API_KEY` or `GEMINI_API_KEY` to `.env` and restart the backend. |
+| Mocks, skill tests or the inbox say no AI is configured | Add `GROQ_API_KEY` (free), `OPENAI_API_KEY` or `GEMINI_API_KEY` to `.env` and restart the backend. |
 | GitHub analysis fails | You've hit GitHub's hourly limit. Wait, or add `GITHUB_TOKEN` to `.env`. |
 | Inbox can't sign in | Use a Gmail **app password** (Google Account → Security → App passwords), not your normal password. |
 | A page shows "This page couldn't load" | Click **Reload page**. If it keeps happening, the message says what failed. |

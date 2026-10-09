@@ -6,6 +6,7 @@ import {
 import { SKILL_CATALOG, ALL_SKILLS, levelFromScore, ratingFromScore } from '../../shared/skillsCatalog';
 import { learnLinksFor } from '../data/learningResources';
 import { isCodingTopic, practiceLevel } from '../../shared/codingTopics';
+import { estimateAbility, byDifficulty, overallAbility } from '../../shared/abilityScore';
 import CodingPractice from './CodingPractice';
 import { PenguinTest, Segmented } from './MocksTab';
 import { Donut, Legend, BarList, Columns, TrendLine } from './charts';
@@ -195,7 +196,7 @@ const TEST_MAX_SKILLS = 10;
 function SkillAssessment({ skills, levels, onDone, onClose }) {
   const untested = skills.filter(s => levels[s]?.source !== 'test');
   const [picked, setPicked] = useState(() => (untested.length ? untested : skills).slice(0, TEST_MAX_SKILLS));
-  const [level, setLevel] = useState('medium');
+  const [level, setLevel] = useState('mixed');
   const [perSkill, setPerSkill] = useState(5);
   const [progress, setProgress] = useState(null); // { skill: 'writing' | 'ready' | 'failed' }
   const [test, setTest] = useState(null);
@@ -247,7 +248,7 @@ function SkillAssessment({ skills, levels, onDone, onClose }) {
   return (
     <section className="pg-mock-card pg-skilltest-setup">
       <h2 className="pg-mock-h">Test my skills</h2>
-      <p className="pg-mock-sub">One timed test on the skills you pick, one minute per question. Penguin scores each skill, rates you from Poor to Excellent, shows where to learn what you missed, and suggests roles from how you did.</p>
+      <p className="pg-mock-sub">One timed test on the skills you pick, one minute per question. Penguin scores each skill (taking question difficulty into account), rates you from Poor to Excellent, shows where to learn what you missed, and suggests roles from how you did.</p>
       <div className="pg-mock-setup">
         <div className="pg-mock-row pg-pp-pick-row">
           <span>Skills</span>
@@ -259,7 +260,7 @@ function SkillAssessment({ skills, levels, onDone, onClose }) {
             ))}
           </div>
         </div>
-        <div className="pg-mock-row"><span>Difficulty</span><Segmented value={level} onChange={setLevel} options={[['easy', 'Easy'], ['medium', 'Medium'], ['hard', 'Hard']]} label="Difficulty" /></div>
+        <div className="pg-mock-row"><span>Difficulty</span><Segmented value={level} onChange={setLevel} options={[['mixed', 'Mixed (recommended)'], ['easy', 'Easy'], ['medium', 'Medium'], ['hard', 'Hard']]} label="Difficulty" /></div>
         <div className="pg-mock-row"><span>Per skill</span><Segmented value={String(perSkill)} onChange={(v) => setPerSkill(Number(v))} options={[['3', '3 questions'], ['5', '5 questions'], ['8', '8 questions']]} label="Questions per skill" /></div>
       </div>
       {skills.length > TEST_MAX_SKILLS && <p className="pg-auto-small">Up to {TEST_MAX_SKILLS} skills per test. Take another test for the rest.</p>}
@@ -295,6 +296,12 @@ const RATING_LINE = {
   poor: (s) => `You're poor at ${s} right now. Start with the basics below, then retest.`,
 };
 const listOf = (a) => (a.length <= 2 ? a.join(' and ') : `${a.slice(0, -1).join(', ')} and ${a[a.length - 1]}`);
+// "3 of 5 right (easy 2/2 · medium 1/2 · hard 0/1)"
+const breakdown = (t) => {
+  if (!t.total) return '';
+  const parts = ['easy', 'medium', 'hard'].filter(d => t.byDifficulty?.[d]).map(d => `${d} ${t.byDifficulty[d].correct}/${t.byDifficulty[d].total}`);
+  return ` ${t.correct} of ${t.total} right${parts.length > 1 ? ` (${parts.join(' · ')})` : ''}.`;
+};
 
 function LearnLinks({ skill, onOpenVisoDsa }) {
   const { viso, links } = learnLinksFor(skill);
@@ -314,7 +321,8 @@ function skillScores(skills, levels) {
     .filter(s => levels[s]?.source === 'test' && levels[s].score != null)
     .map(s => ({ skill: s, ...levels[s], rating: ratingFromScore(levels[s].score) }))
     .sort((a, b) => b.score - a.score);
-  const overall = tested.length ? Math.round(tested.reduce((n, t) => n + t.score, 0) / tested.length) : null;
+  // Overall: inverse-variance weighted mean of ability, so precisely measured skills count more
+  const overall = tested.length ? overallAbility(tested) : null;
   return { tested, overall, rating: overall == null ? null : ratingFromScore(overall) };
 }
 
@@ -348,7 +356,7 @@ function SkillReport({ skills, levels, onTestAll, onTestOne, onOpenVisoDsa }) {
                 {strong.length > 0 && <> You're strongest at {listOf(strong)}.</>}
                 {weak.length > 0 && <> {listOf(weak)} need{weak.length === 1 ? 's' : ''} work.</>}
               </p>
-              <span className="pg-pp-note">Based on {tested.length} tested skill{tested.length === 1 ? '' : 's'}</span>
+              <span className="pg-pp-note">Based on {tested.length} tested skill{tested.length === 1 ? '' : 's'}. Scores use Item Response Theory: the same number right on harder questions scores higher, and more precisely measured skills weigh more in the overall.</span>
             </div>
           </div>
           <ul className="pg-pp-report">
@@ -363,7 +371,8 @@ function SkillReport({ skills, levels, onTestAll, onTestOne, onOpenVisoDsa }) {
                 </div>
                 <p className="pg-pp-rep-msg">
                   {RATING_LINE[t.rating.tone](t.skill)}
-                  {t.total ? ` ${t.correct} of ${t.total} right.` : ''}
+                  {breakdown(t)}
+                  {t.low != null && <span className="pg-pp-range" title="Likely range of your score (±1 standard error). More questions make it narrower."> Likely {t.low}–{t.high} · {t.confidence} confidence{t.confidence === 'Low' ? ', retest with more questions' : ''}.</span>}
                   {isCodingTopic(t.skill) && (
                     <button type="button" className="pg-pp-linkbtn" aria-expanded={Boolean(practice[t.skill])} onClick={() => setPractice(p => ({ ...p, [t.skill]: !p[t.skill] }))}>
                       <Code2 size={13} /> {practice[t.skill] ? 'Hide coding problems' : 'Coding problems on LeetCode, CodeChef & Codeforces'}
@@ -492,7 +501,7 @@ function GitHubPanel({ gh }) {
 }
 
 // ---------------- Roles ----------------
-function RolesCard({ roles, city, myRoles, busy, error, onSuggest, onAdd, onRun, canSuggest, hasTested, stale, onTestAll }) {
+function RolesCard({ roles, learnNext, city, myRoles, busy, error, onSuggest, onAdd, onRun, onTestOne, canSuggest, hasTested, stale, onTestAll }) {
   const mine = (t) => myRoles.some(r => r.toLowerCase() === t.toLowerCase());
   return (
     <Box
@@ -507,7 +516,7 @@ function RolesCard({ roles, city, myRoles, busy, error, onSuggest, onAdd, onRun,
     >
       <p className="pg-pp-note">
         {hasTested
-          ? 'Based on your skill test: skills you scored well on count most, and weak ones show up as things to learn. Add the roles you like — Penguin applies to them on your next run.'
+          ? 'Ranked by how well your skills cover each role\'s core skills (tested skills count at their score), plus live demand in your city. Add the roles you like — Penguin applies to them on your next run.'
           : 'Not sure what to apply for? Penguin suggests roles from how you do on the skill test, plus your resume and coding profiles.'}
       </p>
       {!hasTested && canSuggest && !roles?.length && (
@@ -535,9 +544,18 @@ function RolesCard({ roles, city, myRoles, busy, error, onSuggest, onAdd, onRun,
               </div>
               <p>{r.why}</p>
               <div className="pg-pp-role-skills">
-                {r.matched.map(s => <span key={s} className="pg-pp-has"><Check size={11} /> {s}</span>)}
-                {r.missing.map(s => <span key={s} className="pg-pp-gap">Learn: {s}</span>)}
+                {r.matched.map(m => {
+                  const name = typeof m === 'string' ? m : m.name;
+                  return <span key={name} className="pg-pp-has"><Check size={11} /> {name}{m.pct != null ? ` ${m.pct}%` : ''}</span>;
+                })}
+                {r.missing.map(g => {
+                  const name = typeof g === 'string' ? g : g.name;
+                  return g.untested
+                    ? <button key={name} type="button" className="pg-pp-gap is-test" onClick={() => onTestOne(name)} title={`You listed ${name} but haven't tested it`}><ClipboardCheck size={11} /> Test: {name}</button>
+                    : <span key={name} className="pg-pp-gap">Learn: {name}</span>;
+                })}
               </div>
+              {r.gain && <p className="pg-pp-gain">{r.gain.untested ? 'Testing' : 'Learning'} <strong>{r.gain.skill}</strong>{r.gain.untested ? ' (and scoring 70%+)' : ' to 70%'} would raise your fit to <strong>{r.gain.to}%</strong>.</p>}
               <div className="pg-pp-role-foot">
                 <span>{r.today ? <><strong>{r.today.label}</strong> new today</> : null}{r.week ? <> · <strong>{r.week.label}</strong> this week in {city}</> : null}</span>
                 <a href={r.url} target="_blank" rel="noreferrer">See jobs <ExternalLink size={11} /></a>
@@ -548,6 +566,16 @@ function RolesCard({ roles, city, myRoles, busy, error, onSuggest, onAdd, onRun,
             </li>
           ))}
         </ul>
+      )}
+      {roles?.length > 0 && learnNext?.length > 0 && (
+        <div className="pg-pp-learnnext">
+          <span className="pg-auto-label">Learn next for these roles</span>
+          <ul>
+            {learnNext.map(l => (
+              <li key={l.skill}><strong>{l.skill}</strong> · +{l.points} fit points across {l.roles} role{l.roles === 1 ? '' : 's'}{l.untested ? ' · listed, not tested yet' : ''}</li>
+            ))}
+          </ul>
+        </div>
       )}
       {roles?.some(r => mine(r.title)) && onRun && (
         <div className="pg-pp-run"><span>Penguin will apply to your roles on the next run.</span><button type="button" className="pg-btn pg-btn-primary" onClick={onRun}><Play size={13} /> Run Penguin</button></div>
@@ -628,11 +656,20 @@ export default function PenguinProfileTab({ section = 'profile', profile, onSave
     persist(unique, nextLevels);
   };
 
-  const tested = (pct, correct, total, at) => ({ level: levelFromScore(pct), score: pct, source: 'test', testedAt: at, correct, total });
+  // A skill's result from its answers: ability score from Item Response Theory (shared/abilityScore.js)
+  const tested = (responses, at) => {
+    const a = estimateAbility(responses);
+    return {
+      level: levelFromScore(a.score), score: a.score, low: a.low, high: a.high, confidence: a.confidence, theta: a.theta, se: a.se,
+      correct: responses.filter(r => r.correct).length, total: responses.length, byDifficulty: byDifficulty(responses),
+      source: 'test', testedAt: at, method: 'irt',
+    };
+  };
+  const responsesOf = (questions, answers, level) => questions.map((q, i) => ({ skill: q.skill, correct: answers[i] === q.answer, difficulty: q.difficulty || (level === 'mixed' ? 'medium' : level) || 'medium' }));
 
-  const onTestDone = ({ pct, correct, total }) => {
+  const onTestDone = ({ questions, answers, level: testLevel }) => {
     const skill = testing;
-    const nextLevels = { ...levels, [skill]: tested(pct, correct, total, new Date().toISOString()) };
+    const nextLevels = { ...levels, [skill]: tested(responsesOf(questions, answers, testLevel), new Date().toISOString()) };
     const nextSkills = skills.some(s => sameSkill(s, skill)) ? skills : [...skills, skill];
     setLevels(nextLevels);
     setSkills(nextSkills);
@@ -640,16 +677,12 @@ export default function PenguinProfileTab({ section = 'profile', profile, onSave
   };
 
   // Multi-skill test: score each skill from its own questions, then suggest roles from the result
-  const onAssessmentDone = ({ questions, answers }) => {
+  const onAssessmentDone = ({ questions, answers, level: testLevel }) => {
     const per = {};
-    questions.forEach((q, i) => {
-      const r = (per[q.skill] ||= { correct: 0, total: 0 });
-      r.total += 1;
-      if (answers[i] === q.answer) r.correct += 1;
-    });
+    for (const r of responsesOf(questions, answers, testLevel)) (per[r.skill] ||= []).push(r);
     const at = new Date().toISOString();
     const nextLevels = { ...levels };
-    for (const [skill, r] of Object.entries(per)) nextLevels[skill] = tested(Math.round((r.correct / r.total) * 100), r.correct, r.total, at);
+    for (const [skill, responses] of Object.entries(per)) nextLevels[skill] = tested(responses, at);
     setLevels(nextLevels);
     persist(skills, nextLevels);
     suggestRoles(nextLevels);
@@ -702,7 +735,7 @@ export default function PenguinProfileTab({ section = 'profile', profile, onSave
         github: stats.github ? { languages: stats.github.languages, summary: stats.github.insights?.summary } : null,
       } : null;
       const r = await post('/api/career/suggest', { skills: skills.map(s => ({ name: s, level: lv[s]?.level || null, score: lv[s]?.source === 'test' ? lv[s].score : null })), coding, location: city });
-      const value = { city: r.city, roles: r.roles, at: new Date().toISOString() };
+      const value = { city: r.city, roles: r.roles, learnNext: r.learnNext || [], at: new Date().toISOString() };
       setRoles(value);
       writeLocal(ROLES_KEY, value);
     } catch (e) { setRolesError(friendly(e)); } finally { setSuggesting(false); }
@@ -749,6 +782,8 @@ export default function PenguinProfileTab({ section = 'profile', profile, onSave
 
       <RolesCard
         roles={roles?.roles}
+        learnNext={roles?.learnNext}
+        onTestOne={setTesting}
         city={roles?.city || city}
         myRoles={myRoles}
         busy={suggesting}

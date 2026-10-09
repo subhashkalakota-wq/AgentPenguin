@@ -87,16 +87,31 @@ export async function generateTest({ topic, level = 'medium', count = 10 }) {
   need();
   // 3+ questions: the Penguin Profile skill test asks a few per skill
   const n = Math.max(3, Math.min(25, Number(count) || 10));
+  // "mixed": about 30% easy, 40% medium, 30% hard, each labelled, for difficulty-aware
+  // (Item Response Theory) scoring in the Skill Test
+  const mixed = level === 'mixed';
+  const easy = Math.round(n * 0.3);
+  const hard = Math.round(n * 0.3);
+  const plan = mixed
+    ? `Write ${easy} easy, ${n - easy - hard} medium and ${hard} hard questions, in random order, and label each with "difficulty".`
+    : `Write ${n} ${level} questions.`;
   const out = await llmJson(
-    `You write ${level} multiple-choice questions for Indian campus and job placement tests (like TCS NQT, Infosys, Wipro, AMCAT) and tech interviews. `
+    `You write multiple-choice questions for Indian campus and job placement tests (like TCS NQT, Infosys, Wipro, AMCAT) and tech interviews. `
       + `Topic: ${topic}. Each question has exactly 4 options and exactly one correct answer. Check each answer carefully before replying; for aptitude, compute the result. `
+      + 'Easy = basic definitions and syntax; medium = applying it to a small problem; hard = tricky cases, internals or multi-step reasoning. '
       + 'Mix sub-topics; no trick questions; keep questions under 60 words. '
-      + 'Reply with JSON {"questions":[{"question": string, "options": [4 strings], "answer": integer 0-3, "explanation": string (1-3 sentences)}]}.',
-    `Write ${n} questions. Variation: ${Math.random().toString(36).slice(2, 8)}`,
+      + 'Reply with JSON {"questions":[{"question": string, "options": [4 strings], "answer": integer 0-3, "difficulty": "easy"|"medium"|"hard", "explanation": string (1-3 sentences)}]}.',
+    `${plan} Variation: ${Math.random().toString(36).slice(2, 8)}`,
   );
   const questions = (out?.questions || [])
     .filter(q => q && q.question && Array.isArray(q.options) && q.options.length === 4 && Number.isInteger(Number(q.answer)) && Number(q.answer) >= 0 && Number(q.answer) < 4)
-    .map(q => ({ question: String(q.question), options: q.options.map(String), answer: Number(q.answer), explanation: String(q.explanation || '') }))
+    .map(q => ({
+      question: String(q.question),
+      options: q.options.map(String),
+      answer: Number(q.answer),
+      difficulty: mixed ? (['easy', 'medium', 'hard'].includes(q.difficulty) ? q.difficulty : 'medium') : level,
+      explanation: String(q.explanation || ''),
+    }))
     .slice(0, n);
   if (questions.length < Math.min(5, n)) throw new Error("The AI couldn't write this test right now. Try again.");
   return { topic, level, questions };

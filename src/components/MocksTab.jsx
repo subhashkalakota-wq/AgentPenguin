@@ -287,7 +287,7 @@ function FullScreenButton({ on, onToggle }) {
 function TestBody({ roles = [], prefill, fixedTopic, initialTest, doneHint, onComplete, onCancel, fullScreen, onToggleFullScreen }) {
   const [topic, setTopic] = useState(fixedTopic || prefill?.role ? '__custom' : 'Quantitative aptitude');
   const [custom, setCustom] = useState(fixedTopic || (prefill?.role ? `${prefill.role} (assessment${prefill.company ? ` for ${prefill.company}` : ''})` : ''));
-  const [level, setLevel] = useState('medium');
+  const [level, setLevel] = useState(fixedTopic ? 'mixed' : 'medium');
   const [count, setCount] = useState(10);
   const [test, setTest] = useState(initialTest || null);
   const [answers, setAnswers] = useState({});
@@ -305,7 +305,7 @@ function TestBody({ roles = [], prefill, fixedTopic, initialTest, doneHint, onCo
     const correct = test.questions.filter((q, i) => answers[i] === q.answer).length;
     const total = test.questions.length;
     setResult({ correct, total, seconds: Math.round((Date.now() - startedAt) / 1000) });
-    onComplete?.({ correct, total, pct: Math.round((correct / total) * 100), topic: test.topic, questions: test.questions, answers });
+    onComplete?.({ correct, total, pct: Math.round((correct / total) * 100), topic: test.topic, level: test.level, questions: test.questions, answers });
   };
 
   // Countdown; submits automatically when time runs out
@@ -340,7 +340,7 @@ function TestBody({ roles = [], prefill, fixedTopic, initialTest, doneHint, onCo
         <h2 className="pg-mock-h">Test your {fixedTopic} skill</h2>
         <p className="pg-mock-sub">Answer multiple-choice questions on {fixedTopic}, one minute each. Your score sets this skill's level in your Penguin Profile.</p>
         <div className="pg-mock-setup">
-          <div className="pg-mock-row"><span>Difficulty</span><Segmented value={level} onChange={setLevel} options={[['easy', 'Easy'], ['medium', 'Medium'], ['hard', 'Hard']]} label="Difficulty" /></div>
+          <div className="pg-mock-row"><span>Difficulty</span><Segmented value={level} onChange={setLevel} options={[['mixed', 'Mixed (recommended)'], ['easy', 'Easy'], ['medium', 'Medium'], ['hard', 'Hard']]} label="Difficulty" /></div>
           <div className="pg-mock-row"><span>Questions</span><Segmented value={String(count)} onChange={(v) => setCount(Number(v))} options={[['10', '10'], ['15', '15'], ['20', '20']]} label="Questions" /></div>
         </div>
         {error && <p className="pg-rq-message is-error"><AlertTriangle size={14} /> {error}</p>}
