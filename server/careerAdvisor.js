@@ -21,6 +21,10 @@ export async function suggestRoles({ skills = [], resume = null, coding = null, 
       + 'Use common job-board titles (e.g. "Java Developer", "Data Analyst", "Frontend Developer", "QA Engineer"), not invented ones, '
       + 'and keep seniority out of the title (no brackets) — it goes in "level". '
       + 'Match seniority to their experience (freshers: junior / trainee / intern / associate roles). '
+      + 'Each skill may have "score": their Penguin skill-test result in percent. Weigh skills by it: 70%+ are real strengths, '
+      + '40-69% are partial, under 40% are not job-ready yet (list them in "missing", not "matched", when a role depends on them). '
+      + 'Untested skills (score null) count less than tested strong ones. "fit" must reflect the test results. '
+      + 'Never base a role (including the stretch one) on a skill they scored under 40% on. '
       + 'Reply with JSON {"roles":[{"title": string, "fit": integer 0-100, "why": string (one sentence), "matched": [string] (their skills that fit), '
       + '"missing": [string] (max 3 skills to learn for this role), "level": "Internship"|"Entry level"|"Associate"|"Mid-Senior level"}]}.',
     JSON.stringify({

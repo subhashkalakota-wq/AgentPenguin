@@ -920,6 +920,7 @@ export default function App() {
             onSaveConfig={handleSaveConfig}
             currentUser={currentUser}
             onRun={isAgentActive ? null : handleStart}
+            onOpenVisoDsa={() => navigateTo('/viso-dsa')}
           />
         );
       case 'inbox':

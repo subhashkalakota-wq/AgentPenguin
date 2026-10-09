@@ -19,3 +19,13 @@ export const ALL_SKILLS = SKILL_CATALOG.flatMap(g => g.skills);
 
 // Level from a skill-test score (percent)
 export const levelFromScore = (pct) => (pct >= 90 ? 'Expert' : pct >= 70 ? 'Advanced' : pct >= 40 ? 'Intermediate' : 'Beginner');
+
+// Plain verdict on a skill-test score, from Poor to Excellent (shown in the skill report)
+export const RATINGS = [
+  { min: 90, label: 'Excellent', tone: 'excellent' },
+  { min: 70, label: 'Very good', tone: 'strong' },
+  { min: 55, label: 'Good', tone: 'good' },
+  { min: 40, label: 'Average', tone: 'average' },
+  { min: 0, label: 'Poor', tone: 'poor' },
+];
+export const ratingFromScore = (pct) => RATINGS.find(r => pct >= r.min);

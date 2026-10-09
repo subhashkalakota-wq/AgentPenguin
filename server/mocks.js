@@ -85,7 +85,8 @@ export async function interviewSummary({ role, kind = 'technical', rounds = [] }
 /** A multiple-choice test: [{ question, options[4], answer (index), explanation }]. */
 export async function generateTest({ topic, level = 'medium', count = 10 }) {
   need();
-  const n = Math.max(5, Math.min(25, Number(count) || 10));
+  // 3+ questions: the Penguin Profile skill test asks a few per skill
+  const n = Math.max(3, Math.min(25, Number(count) || 10));
   const out = await llmJson(
     `You write ${level} multiple-choice questions for Indian campus and job placement tests (like TCS NQT, Infosys, Wipro, AMCAT) and tech interviews. `
       + `Topic: ${topic}. Each question has exactly 4 options and exactly one correct answer. Check each answer carefully before replying; for aptitude, compute the result. `

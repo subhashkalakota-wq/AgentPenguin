@@ -3742,3 +3742,73 @@
 .pg-pp-toggle { height: 30px; padding: 0 10px; font-size: 12.5px; }
 .pg-pp-card.is-collapsed .pg-pp-head, .pg-pp-site.is-collapsed .pg-pp-head { margin-bottom: 0; }
 .pg-pp-overview .pg-pp-summary .pg-stat { padding: 12px 14px; }
+
+/* Penguin Profile: skills tabs, skill test and skill report */
+.pg-pp-tabs { display: flex; gap: 2px; margin-bottom: 14px; border-bottom: 1px solid var(--border-subtle); }
+.pg-pp-tabs button { display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; border: 0; border-bottom: 2px solid transparent; background: none; font-size: 13px; font-weight: 600; color: var(--text-muted); cursor: pointer; }
+.pg-pp-tabs button:hover { color: var(--text-primary); }
+.pg-pp-tabs button.active { color: var(--text-primary); border-bottom-color: var(--pg-ink); }
+.pg-pp-tabs button span { padding: 0 6px; font-size: 11.5px; background: var(--bg-inset); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.pg-pp-suggest { margin-top: 0; }
+.pg-pp-suggest-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.pg-pp-suggest-head .pg-pp-note { margin: 0; }
+.pg-pp-suggest-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.pg-pp-suggest-list li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 10px; border: 1px solid var(--border-subtle); }
+.pg-pp-suggest-list strong { font-size: 13.5px; color: var(--text-primary); }
+.pg-pp-evidence { flex: 1; min-width: 140px; font-size: 12.5px; color: var(--text-muted); }
+
+.pg-pp-testcta { display: flex; align-items: center; justify-content: space-between; gap: 10px 14px; flex-wrap: wrap; margin-top: 14px; padding: 10px 14px; background: var(--pg-sand-soft); font-size: 13px; color: var(--text-primary); }
+.pg-pp-cta-btns { display: inline-flex; gap: 8px; flex-wrap: wrap; }
+.pg-pp-stale { margin: 0 0 10px; }
+.pg-pp-pick-row { align-items: start; }
+.pg-pp-pick-row > span { padding-top: 6px; }
+.pg-pp-skipped { margin: 14px 24px 0; }
+.pg-pp-writing { display: grid; gap: 8px; }
+.pg-pp-writing ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.pg-pp-writing li { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; color: var(--text-muted); }
+.pg-pp-writing li.is-ready { color: var(--text-primary); }
+.pg-pp-writing li.is-ready svg { color: var(--pg-sage-deep); }
+.pg-pp-writing li.is-failed svg { color: var(--status-danger); }
+.pg-test-skill { display: inline-block; margin-right: 6px; padding: 0 6px; font-style: normal; font-size: 11px; font-weight: 700; background: var(--bg-inset); color: var(--text-secondary); vertical-align: 1px; }
+
+.pg-pp-report-empty { display: grid; gap: 12px; justify-items: start; }
+.pg-pp-report-empty p { margin: 0; font-size: 13.5px; line-height: 1.55; color: var(--text-secondary); }
+.pg-pp-overall { display: flex; align-items: center; gap: 18px; padding: 14px 16px; background: var(--bg-inset); box-shadow: inset 3px 0 0 var(--pg-sage); margin-bottom: 8px; }
+.pg-pp-overall.is-good { box-shadow: inset 3px 0 0 var(--pg-sand); }
+.pg-pp-overall.is-average { box-shadow: inset 3px 0 0 rgba(245, 158, 11, 0.7); }
+.pg-pp-overall.is-poor { box-shadow: inset 3px 0 0 rgba(239, 68, 68, 0.7); }
+.pg-pp-overall p { margin: 6px 0 2px; font-size: 13.5px; line-height: 1.5; color: var(--text-primary); }
+.pg-pp-overall .pg-pp-note { margin: 0; font-size: 12px; }
+.pg-pp-overall-score { display: grid; justify-items: center; min-width: 76px; }
+.pg-pp-overall-score strong { font-family: var(--font-heading); font-size: 32px; font-weight: 700; line-height: 1.1; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.pg-pp-overall-score span { font-size: 11.5px; color: var(--text-muted); }
+
+.pg-pp-rating { display: inline-flex; align-items: center; padding: 1px 8px; font-size: 11.5px; font-weight: 700; color: var(--text-primary); white-space: nowrap; }
+.pg-pp-rating.is-excellent { background: var(--pg-sage-soft); box-shadow: inset 0 0 0 1px var(--pg-sage); }
+.pg-pp-rating.is-strong { background: var(--pg-sage-soft); }
+.pg-pp-rating.is-good { background: var(--pg-sand-soft); box-shadow: inset 0 0 0 1px var(--pg-sand); }
+.pg-pp-rating.is-average { background: rgba(245, 158, 11, 0.14); box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.5); }
+.pg-pp-rating.is-poor { background: rgba(239, 68, 68, 0.12); box-shadow: inset 0 0 0 1px rgba(239, 68, 68, 0.45); }
+
+.pg-pp-report { list-style: none; margin: 0; padding: 0; }
+.pg-pp-report > li { padding: 12px 0; border-bottom: 1px solid var(--border-subtle); }
+.pg-pp-report > li:last-child { border-bottom: 0; }
+.pg-pp-rep-row { display: grid; grid-template-columns: minmax(110px, 200px) minmax(0, 1fr) 44px 92px auto; align-items: center; gap: 12px; }
+.pg-pp-rep-skill { font-size: 13.5px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pg-pp-rep-bar { display: block; height: 10px; background: var(--viz-track); overflow: hidden; }
+.pg-pp-rep-bar span { display: block; height: 100%; background: var(--viz-seq-2); }
+.pg-pp-rep-pct { font-size: 13px; font-weight: 700; color: var(--text-primary); text-align: right; font-variant-numeric: tabular-nums; }
+.pg-pp-rep-row .pg-pp-rating { justify-self: start; }
+.pg-pp-rep-msg { margin: 6px 0 0; font-size: 13px; color: var(--text-secondary); }
+.pg-pp-learn { display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap; margin-top: 8px; padding: 8px 10px; background: var(--bg-inset); }
+.pg-pp-learn-label { display: inline-flex; align-items: center; gap: 5px; margin-right: 4px; font-size: 12px; font-weight: 700; color: var(--text-muted); }
+.pg-pp-learn .pg-chip { display: inline-flex; align-items: center; gap: 4px; height: 28px; text-decoration: none; }
+.pg-pp-learn .pg-btn { height: 28px; text-decoration: none; }
+
+@media (max-width: 640px) {
+  .pg-pp-rep-row { grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 8px; }
+  .pg-pp-rep-bar { grid-row: 2; grid-column: 1 / -1; }
+  .pg-pp-overall { gap: 12px; padding: 12px; }
+  .pg-pp-overall-score strong { font-size: 26px; }
+  .pg-pp-tabs button { padding: 8px 8px; font-size: 12.5px; }
+}

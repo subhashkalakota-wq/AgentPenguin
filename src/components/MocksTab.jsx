@@ -18,7 +18,7 @@ async function post(path, body) {
 const friendly = (e) => (e.message === 'Failed to fetch' ? 'Backend is not running. Start it with: npm run server' : e.message);
 const shortRole = (r = '') => r.replace(/\(.*?\)/g, '').trim();
 
-function Segmented({ value, onChange, options, label }) {
+export function Segmented({ value, onChange, options, label }) {
   return (
     <div className="pg-toggle-row" role="radiogroup" aria-label={label}>
       {options.map(([k, l]) => (
@@ -237,19 +237,21 @@ function PenguinInterview({ roles, prefill }) {
 // ---------------- Penguin test ----------------
 /**
  * Timed MCQ test. In the Penguin Profile it runs as a skill test: `fixedTopic` locks the
- * skill and `onComplete({ correct, total, pct })` reports the score so the skill level updates.
+ * skill, or `initialTest` starts a ready-made test straight away (the multi-skill test,
+ * whose questions carry a `skill`). `onComplete({ correct, total, pct, questions, answers })`
+ * reports the result so skill levels update; `doneHint` is shown next to Done.
  */
-export function PenguinTest({ roles = [], prefill, fixedTopic, onComplete, onCancel }) {
+export function PenguinTest({ roles = [], prefill, fixedTopic, initialTest, doneHint, onComplete, onCancel }) {
   const [topic, setTopic] = useState(fixedTopic || prefill?.role ? '__custom' : 'Quantitative aptitude');
   const [custom, setCustom] = useState(fixedTopic || (prefill?.role ? `${prefill.role} (assessment${prefill.company ? ` for ${prefill.company}` : ''})` : ''));
   const [level, setLevel] = useState('medium');
   const [count, setCount] = useState(10);
-  const [test, setTest] = useState(null);
+  const [test, setTest] = useState(initialTest || null);
   const [answers, setAnswers] = useState({});
   const [flags, setFlags] = useState({});
   const [idx, setIdx] = useState(0);
-  const [left, setLeft] = useState(0);
-  const [startedAt, setStartedAt] = useState(0);
+  const [left, setLeft] = useState(() => (initialTest ? initialTest.questions.length * 60 : 0));
+  const [startedAt, setStartedAt] = useState(() => (initialTest ? Date.now() : 0));
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -260,7 +262,7 @@ export function PenguinTest({ roles = [], prefill, fixedTopic, onComplete, onCan
     const correct = test.questions.filter((q, i) => answers[i] === q.answer).length;
     const total = test.questions.length;
     setResult({ correct, total, seconds: Math.round((Date.now() - startedAt) / 1000) });
-    onComplete?.({ correct, total, pct: Math.round((correct / total) * 100), topic: test.topic });
+    onComplete?.({ correct, total, pct: Math.round((correct / total) * 100), topic: test.topic, questions: test.questions, answers });
   };
 
   // Countdown; submits automatically when time runs out
@@ -357,15 +359,15 @@ export function PenguinTest({ roles = [], prefill, fixedTopic, onComplete, onCan
             const ok = mine === q.answer;
             return (
               <li key={i} className={ok ? 'is-right' : 'is-wrong'}>
-                <div className="pg-test-review-q">{ok ? <CheckCircle2 size={15} /> : <XCircle size={15} />}<span>{q.question}</span></div>
+                <div className="pg-test-review-q">{ok ? <CheckCircle2 size={15} /> : <XCircle size={15} />}<span>{q.skill && <em className="pg-test-skill">{q.skill}</em>}{q.question}</span></div>
                 <p>Your answer: <strong>{mine == null ? 'Not answered' : q.options[mine]}</strong>{!ok && <> · Correct: <strong>{q.options[q.answer]}</strong></>}</p>
                 {q.explanation && <p className="pg-test-expl">{q.explanation}</p>}
               </li>
             );
           })}
         </ol>
-        {fixedTopic
-          ? <div className="pg-mock-answer-bar"><span className="pg-mock-hint">Your {fixedTopic} level was updated in your Penguin Profile.</span><button type="button" className="pg-btn pg-btn-primary" onClick={onCancel}>Done</button></div>
+        {fixedTopic || initialTest
+          ? <div className="pg-mock-answer-bar"><span className="pg-mock-hint">{doneHint || `Your ${fixedTopic} level was updated in your Penguin Profile.`}</span><button type="button" className="pg-btn pg-btn-primary" onClick={onCancel}>Done</button></div>
           : <button type="button" className="pg-btn pg-btn-primary" onClick={reset}><RotateCcw size={14} /> Take another test</button>}
       </section>
     );
@@ -376,7 +378,7 @@ export function PenguinTest({ roles = [], prefill, fixedTopic, onComplete, onCan
   return (
     <section className="pg-card pg-mock-card">
       <div className="pg-mock-progress">
-        <span>{test.topic} · Question {idx + 1} of {test.questions.length}</span>
+        <span>{q.skill || test.topic} · Question {idx + 1} of {test.questions.length}</span>
         <span className={`pg-test-timer ${left < 60 ? 'is-low' : ''}`}><Timer size={14} /> {Math.floor(left / 60)}:{String(left % 60).padStart(2, '0')}</span>
       </div>
       <div className="pg-test-layout">

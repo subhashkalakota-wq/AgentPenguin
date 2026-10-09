@@ -1,10 +1,11 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Sparkles, Search, Plus, X, Check, ClipboardCheck, Loader2, AlertTriangle, RefreshCw, ExternalLink, Star, GitFork,
-  Trophy, Code2, FolderGit2, Target, Play, BadgeCheck, ChevronDown, ChevronUp,
+  Trophy, Code2, FolderGit2, Target, Play, BadgeCheck, ChevronDown, ChevronUp, BookOpen, Gauge, GraduationCap,
 } from 'lucide-react';
-import { SKILL_CATALOG, ALL_SKILLS, levelFromScore } from '../../shared/skillsCatalog';
-import { PenguinTest } from './MocksTab';
+import { SKILL_CATALOG, ALL_SKILLS, levelFromScore, ratingFromScore } from '../../shared/skillsCatalog';
+import { learnLinksFor } from '../data/learningResources';
+import { PenguinTest, Segmented } from './MocksTab';
 import { Donut, Legend, BarList, Columns, TrendLine } from './charts';
 import { authFetch } from '../lib/api';
 
@@ -74,7 +75,8 @@ function Box({ id, icon: Icon, title, actions, openActions, className = 'pg-pp-c
 }
 
 // ---------------- Skills ----------------
-function SkillsCard({ skills, levels, onChange, onTest, suggestions }) {
+function SkillsCard({ skills, levels, onChange, onTest, onTestAll, suggestions }) {
+  const [tab, setTab] = useState('mine');
   const [query, setQuery] = useState('');
   const [group, setGroup] = useState(SKILL_CATALOG[0].group);
   const q = query.trim().toLowerCase();
@@ -84,68 +86,294 @@ function SkillsCard({ skills, levels, onChange, onTest, suggestions }) {
   const has = (s) => skills.some(x => sameSkill(x, s));
   const toggle = (s) => (has(s) ? onChange(skills.filter(x => !sameSkill(x, s))) : onChange([...skills, s], { [s]: { level: null, source: 'self' } }));
   const addCustom = () => { const v = query.trim(); if (v && !has(v)) onChange([...skills, v], { [v]: { level: null, source: 'self' } }); setQuery(''); };
+  const addSuggestion = (s) => onChange([...skills, s.skill], { [s.skill]: { level: s.level || null, source: s.source, evidence: s.evidence } });
+  const untested = skills.filter(s => levels[s]?.source !== 'test');
 
   return (
     <Box id="skills" icon={Sparkles} title="Your skills" actions={<span className="pg-mk-sub">{skills.length} selected</span>}>
-      {skills.length === 0 && <p className="pg-mk-empty">Pick your skills below. Penguin suggests roles from them and answers application questions with them.</p>}
-      <ul className="pg-pp-skills">
-        {skills.map(s => {
-          const info = levels[s];
-          return (
-            <li key={s}>
-              <span className="pg-pp-skill-name">{s}</span>
-              <LevelBadge info={info} />
-              <button type="button" className="pg-pp-test" onClick={() => onTest(s)} title={`Take a ${s} test`}>
-                <ClipboardCheck size={13} /> {info?.source === 'test' ? 'Retest' : 'Test'}
-              </button>
-              <button type="button" className="pg-pp-remove" onClick={() => toggle(s)} aria-label={`Remove ${s}`}><X size={13} /></button>
-            </li>
-          );
-        })}
-      </ul>
+      <div className="pg-pp-tabs" role="tablist" aria-label="Skills">
+        <button type="button" role="tab" aria-selected={tab === 'mine'} className={tab === 'mine' ? 'active' : ''} onClick={() => setTab('mine')}>
+          Your skills <span>{skills.length}</span>
+        </button>
+        <button type="button" role="tab" aria-selected={tab === 'suggested'} className={tab === 'suggested' ? 'active' : ''} onClick={() => setTab('suggested')}>
+          Suggested for you <span>{suggestions.length}</span>
+        </button>
+      </div>
 
-      {suggestions.length > 0 && (
-        <div className="pg-pp-suggest">
-          <span className="pg-auto-label">Suggested for you</span>
-          <div className="pg-toggle-row">
-            {suggestions.map(s => (
-              <button key={s.skill} type="button" className="pg-chip" title={s.evidence || ''} onClick={() => onChange([...skills, s.skill], { [s.skill]: { level: s.level || null, source: s.source, evidence: s.evidence } })}>
-                <Plus size={12} /> {s.skill}{s.level ? ` · ${s.level}` : ''}
-              </button>
-            ))}
-            {suggestions.length > 1 && (
-              <button type="button" className="pg-chip active" onClick={() => onChange([...skills, ...suggestions.map(s => s.skill)], Object.fromEntries(suggestions.map(s => [s.skill, { level: s.level || null, source: s.source, evidence: s.evidence }])))}>
-                Add all
-              </button>
+      {tab === 'suggested' ? (
+        <div className="pg-pp-suggest" role="tabpanel">
+          {suggestions.length === 0 ? (
+            <p className="pg-mk-empty">No suggestions yet. Upload your resume in Profile or analyse your coding profiles below, and Penguin suggests skills from them.</p>
+          ) : (
+            <>
+              <div className="pg-pp-suggest-head">
+                <p className="pg-pp-note">From your resume and coding profiles. Add the ones you have, then test them.</p>
+                {suggestions.length > 1 && (
+                  <button type="button" className="pg-btn" onClick={() => onChange([...skills, ...suggestions.map(s => s.skill)], Object.fromEntries(suggestions.map(s => [s.skill, { level: s.level || null, source: s.source, evidence: s.evidence }])))}>
+                    <Plus size={13} /> Add all
+                  </button>
+                )}
+              </div>
+              <ul className="pg-pp-suggest-list">
+                {suggestions.map(s => (
+                  <li key={s.skill}>
+                    <strong>{s.skill}</strong>
+                    {s.level && <span className={`pg-pp-level is-${s.level.toLowerCase()}`}>{s.level}</span>}
+                    <span className="pg-pp-evidence">{s.evidence}</span>
+                    <button type="button" className="pg-pp-test" onClick={() => addSuggestion(s)}><Plus size={13} /> Add</button>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      ) : (
+        <div role="tabpanel">
+          {skills.length === 0 && <p className="pg-mk-empty">Pick your skills below, then take one test on them. Penguin scores each skill and suggests roles from how you did.</p>}
+          <ul className="pg-pp-skills">
+            {skills.map(s => {
+              const info = levels[s];
+              return (
+                <li key={s}>
+                  <span className="pg-pp-skill-name">{s}</span>
+                  <LevelBadge info={info} />
+                  <button type="button" className="pg-pp-test" onClick={() => onTest(s)} title={`Take a ${s} test`}>
+                    <ClipboardCheck size={13} /> {info?.source === 'test' ? 'Retest' : 'Test'}
+                  </button>
+                  <button type="button" className="pg-pp-remove" onClick={() => toggle(s)} aria-label={`Remove ${s}`}><X size={13} /></button>
+                </li>
+              );
+            })}
+          </ul>
+
+          {skills.length > 0 && (
+            <div className="pg-pp-testcta">
+              <span>
+                {untested.length
+                  ? <><strong>{untested.length} of {skills.length}</strong> skill{skills.length === 1 ? '' : 's'} not tested yet. Take one test on them to see how you rate.</>
+                  : 'All your skills are tested. Retake the test any time to update your scores.'}
+              </span>
+              <button type="button" className="pg-btn pg-btn-primary" onClick={onTestAll}><ClipboardCheck size={14} /> Test my skills</button>
+            </div>
+          )}
+
+          <div className="pg-pp-picker">
+            <div className="pg-role-add">
+              <div className="pg-role-input">
+                <Search size={14} />
+                <input value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addCustom(); } }} placeholder="Search skills, e.g. React, Excel, Sales" aria-label="Search skills" />
+              </div>
+              {q && !ALL_SKILLS.some(s => s.toLowerCase() === q) && <button type="button" className="pg-btn" onClick={addCustom}><Plus size={14} /> Add “{query.trim()}”</button>}
+            </div>
+            {!q && (
+              <div className="pg-pp-groups" role="tablist" aria-label="Skill groups">
+                {SKILL_CATALOG.map(g => (
+                  <button key={g.group} type="button" role="tab" aria-selected={group === g.group} className={group === g.group ? 'active' : ''} onClick={() => setGroup(g.group)}>{g.group}</button>
+                ))}
+              </div>
             )}
+            <div className="pg-pp-catalog">
+              {visible.map(s => (
+                <button key={s} type="button" className={`pg-chip ${has(s) ? 'active' : ''}`} aria-pressed={has(s)} onClick={() => toggle(s)}>
+                  {has(s) ? <Check size={12} /> : <Plus size={12} />} {s}
+                </button>
+              ))}
+              {q && visible.length === 0 && <span className="pg-mk-empty">Not in the list — press Enter to add it.</span>}
+            </div>
           </div>
         </div>
       )}
+    </Box>
+  );
+}
 
-      <div className="pg-pp-picker">
-        <div className="pg-role-add">
-          <div className="pg-role-input">
-            <Search size={14} />
-            <input value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addCustom(); } }} placeholder="Search skills, e.g. React, Excel, Sales" aria-label="Search skills" />
-          </div>
-          {q && !ALL_SKILLS.some(s => s.toLowerCase() === q) && <button type="button" className="pg-btn" onClick={addCustom}><Plus size={14} /> Add “{query.trim()}”</button>}
-        </div>
-        {!q && (
-          <div className="pg-pp-groups" role="tablist" aria-label="Skill groups">
-            {SKILL_CATALOG.map(g => (
-              <button key={g.group} type="button" role="tab" aria-selected={group === g.group} className={group === g.group ? 'active' : ''} onClick={() => setGroup(g.group)}>{g.group}</button>
+// ---------------- Skill test (several skills in one test) ----------------
+const TEST_MAX_SKILLS = 10;
+
+function SkillAssessment({ skills, levels, onDone, onClose }) {
+  const untested = skills.filter(s => levels[s]?.source !== 'test');
+  const [picked, setPicked] = useState(() => (untested.length ? untested : skills).slice(0, TEST_MAX_SKILLS));
+  const [level, setLevel] = useState('medium');
+  const [perSkill, setPerSkill] = useState(5);
+  const [progress, setProgress] = useState(null); // { skill: 'writing' | 'ready' | 'failed' }
+  const [test, setTest] = useState(null);
+  const [error, setError] = useState(null);
+  const total = picked.length * perSkill;
+  const toggle = (s) => setPicked(p => (p.includes(s) ? p.filter(x => x !== s) : p.length >= TEST_MAX_SKILLS ? p : [...p, s]));
+
+  // Questions for each skill are written separately (3 at a time) so progress shows per skill
+  const start = async () => {
+    setError(null);
+    setProgress(Object.fromEntries(picked.map(s => [s, 'writing'])));
+    const bySkill = {};
+    let lastError = null;
+    const queue = [...picked];
+    const worker = async () => {
+      while (queue.length) {
+        const skill = queue.shift();
+        for (let attempt = 0; attempt < 2 && !bySkill[skill]; attempt++) {
+          try { bySkill[skill] = (await post('/api/mock/test', { topic: skill, level, count: perSkill })).questions; } catch (e) { lastError = e; }
+        }
+        setProgress(p => ({ ...p, [skill]: bySkill[skill] ? 'ready' : 'failed' }));
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
+    const ready = picked.filter(s => bySkill[s]?.length);
+    if (!ready.length) {
+      setError(lastError ? friendly(lastError) : "The AI couldn't write questions right now. Try again in a minute.");
+      setProgress(null);
+      return;
+    }
+    setTest({
+      topic: ready.length === 1 ? ready[0] : `Skill test · ${ready.length} skills`,
+      level,
+      questions: ready.flatMap(s => bySkill[s].slice(0, perSkill).map(q => ({ ...q, skill: s }))),
+      skipped: picked.filter(s => !bySkill[s]?.length),
+    });
+  };
+
+  if (test) {
+    return (
+      <>
+        {test.skipped.length > 0 && <p className="pg-rq-message is-error pg-pp-skipped"><AlertTriangle size={14} /> Couldn't write questions for {test.skipped.join(', ')}, so {test.skipped.length === 1 ? "it's" : "they're"} left out of this test.</p>}
+        <PenguinTest initialTest={test} doneHint="Your skill report and role suggestions are updated in your Penguin Profile." onComplete={onDone} onCancel={onClose} />
+      </>
+    );
+  }
+
+  const ready = progress ? Object.values(progress).filter(v => v !== 'writing').length : 0;
+  return (
+    <section className="pg-mock-card pg-skilltest-setup">
+      <h2 className="pg-mock-h">Test my skills</h2>
+      <p className="pg-mock-sub">One timed test on the skills you pick, one minute per question. Penguin scores each skill, rates you from Poor to Excellent, shows where to learn what you missed, and suggests roles from how you did.</p>
+      <div className="pg-mock-setup">
+        <div className="pg-mock-row pg-pp-pick-row">
+          <span>Skills</span>
+          <div className="pg-toggle-row">
+            {skills.map(s => (
+              <button key={s} type="button" className={`pg-chip ${picked.includes(s) ? 'active' : ''}`} aria-pressed={picked.includes(s)} onClick={() => toggle(s)} disabled={Boolean(progress)}>
+                {picked.includes(s) ? <Check size={12} /> : <Plus size={12} />} {s}
+              </button>
             ))}
           </div>
-        )}
-        <div className="pg-pp-catalog">
-          {visible.map(s => (
-            <button key={s} type="button" className={`pg-chip ${has(s) ? 'active' : ''}`} aria-pressed={has(s)} onClick={() => toggle(s)}>
-              {has(s) ? <Check size={12} /> : <Plus size={12} />} {s}
-            </button>
-          ))}
-          {q && visible.length === 0 && <span className="pg-mk-empty">Not in the list — press Enter to add it.</span>}
         </div>
+        <div className="pg-mock-row"><span>Difficulty</span><Segmented value={level} onChange={setLevel} options={[['easy', 'Easy'], ['medium', 'Medium'], ['hard', 'Hard']]} label="Difficulty" /></div>
+        <div className="pg-mock-row"><span>Per skill</span><Segmented value={String(perSkill)} onChange={(v) => setPerSkill(Number(v))} options={[['3', '3 questions'], ['5', '5 questions'], ['8', '8 questions']]} label="Questions per skill" /></div>
       </div>
+      {skills.length > TEST_MAX_SKILLS && <p className="pg-auto-small">Up to {TEST_MAX_SKILLS} skills per test. Take another test for the rest.</p>}
+      {progress && (
+        <div className="pg-pp-writing" role="status">
+          <span className="pg-auto-label">Writing your questions · {ready} of {picked.length} skills ready</span>
+          <ul>
+            {picked.map(s => (
+              <li key={s} className={`is-${progress[s]}`}>
+                {progress[s] === 'writing' ? <Loader2 size={13} className="pg-spin" /> : progress[s] === 'ready' ? <Check size={13} /> : <AlertTriangle size={13} />} {s}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {error && <p className="pg-rq-message is-error"><AlertTriangle size={14} /> {error}</p>}
+      <div className="pg-mock-answer-bar">
+        <button type="button" className="pg-btn" onClick={onClose}>Cancel</button>
+        <button type="button" className="pg-btn pg-btn-primary" onClick={start} disabled={!picked.length || Boolean(progress)}>
+          {progress ? <><Loader2 size={15} className="pg-spin" /> Writing your test…</> : <><ClipboardCheck size={15} /> Start {total}-question test · {total} min</>}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+// ---------------- Skill report ----------------
+const RATING_LINE = {
+  excellent: (s) => `You're excellent at ${s}.`,
+  strong: (s) => `You're very good at ${s}.`,
+  good: (s) => `You're good at ${s}. A little more practice makes it a strength.`,
+  average: (s) => `You're average at ${s}. Learn the gaps below, then retest.`,
+  poor: (s) => `You're poor at ${s} right now. Start with the basics below, then retest.`,
+};
+const listOf = (a) => (a.length <= 2 ? a.join(' and ') : `${a.slice(0, -1).join(', ')} and ${a[a.length - 1]}`);
+
+function LearnLinks({ skill, onOpenVisoDsa }) {
+  const { viso, links } = learnLinksFor(skill);
+  return (
+    <div className="pg-pp-learn">
+      <span className="pg-pp-learn-label"><BookOpen size={13} /> Learn {skill}</span>
+      {viso && (onOpenVisoDsa
+        ? <button type="button" className="pg-btn pg-btn-primary" onClick={onOpenVisoDsa}><GraduationCap size={13} /> Learn on Viso DSA</button>
+        : <a className="pg-btn pg-btn-primary" href="/viso-dsa"><GraduationCap size={13} /> Learn on Viso DSA</a>)}
+      {links.map(l => <a key={l.url} className="pg-chip" href={l.url} target="_blank" rel="noreferrer">{l.name} <ExternalLink size={11} /></a>)}
+    </div>
+  );
+}
+
+function skillScores(skills, levels) {
+  const tested = skills
+    .filter(s => levels[s]?.source === 'test' && levels[s].score != null)
+    .map(s => ({ skill: s, ...levels[s], rating: ratingFromScore(levels[s].score) }))
+    .sort((a, b) => b.score - a.score);
+  const overall = tested.length ? Math.round(tested.reduce((n, t) => n + t.score, 0) / tested.length) : null;
+  return { tested, overall, rating: overall == null ? null : ratingFromScore(overall) };
+}
+
+function SkillReport({ skills, levels, onTestAll, onTestOne, onOpenVisoDsa }) {
+  const { tested, overall, rating } = skillScores(skills, levels);
+  const untested = skills.filter(s => levels[s]?.source !== 'test');
+  const strong = tested.filter(t => t.score >= 70).map(t => t.skill);
+  const weak = tested.filter(t => t.score < 55).map(t => t.skill);
+
+  return (
+    <Box
+      id="report"
+      icon={Gauge}
+      title="Skill report"
+      openActions={tested.length > 0 && <button type="button" className="pg-btn" onClick={onTestAll}><RefreshCw size={13} /> Retake test</button>}
+    >
+      {tested.length === 0 ? (
+        <div className="pg-pp-report-empty">
+          <p>See how good you really are. Take one test on your skills: Penguin scores each one, rates you from <strong>Poor</strong> to <strong>Excellent</strong>, shows where to learn what you missed, and suggests roles from how you did.</p>
+          <button type="button" className="pg-btn pg-btn-primary" onClick={onTestAll} disabled={!skills.length}><ClipboardCheck size={14} /> {skills.length ? `Test my ${skills.length} skill${skills.length === 1 ? '' : 's'}` : 'Add skills first'}</button>
+        </div>
+      ) : (
+        <>
+          <div className={`pg-pp-overall is-${rating.tone}`}>
+            <div className="pg-pp-overall-score"><strong>{overall}%</strong><span>overall</span></div>
+            <div>
+              <span className={`pg-pp-rating is-${rating.tone}`}>{rating.label}</span>
+              <p>
+                Overall, you're {rating.label.toLowerCase()}.
+                {strong.length > 0 && <> You're strongest at {listOf(strong)}.</>}
+                {weak.length > 0 && <> {listOf(weak)} need{weak.length === 1 ? 's' : ''} work.</>}
+              </p>
+              <span className="pg-pp-note">Based on {tested.length} tested skill{tested.length === 1 ? '' : 's'}</span>
+            </div>
+          </div>
+          <ul className="pg-pp-report">
+            {tested.map(t => (
+              <li key={t.skill}>
+                <div className="pg-pp-rep-row">
+                  <strong className="pg-pp-rep-skill">{t.skill}</strong>
+                  <span className="pg-pp-rep-bar" aria-hidden="true"><span style={{ width: `${Math.max(2, t.score)}%` }} /></span>
+                  <span className="pg-pp-rep-pct">{t.score}%</span>
+                  <span className={`pg-pp-rating is-${t.rating.tone}`}>{t.rating.label}</span>
+                  <button type="button" className="pg-pp-test" onClick={() => onTestOne(t.skill)}><ClipboardCheck size={13} /> Retest</button>
+                </div>
+                <p className="pg-pp-rep-msg">
+                  {RATING_LINE[t.rating.tone](t.skill)}
+                  {t.total ? ` ${t.correct} of ${t.total} right.` : ''}
+                </p>
+                {t.score < 70 && <LearnLinks skill={t.skill} onOpenVisoDsa={onOpenVisoDsa} />}
+              </li>
+            ))}
+          </ul>
+          {untested.length > 0 && (
+            <div className="pg-pp-testcta">
+              <span>Not tested yet: <strong>{listOf(untested)}</strong></span>
+              <button type="button" className="pg-btn" onClick={onTestAll}><ClipboardCheck size={14} /> Test {untested.length === 1 ? 'it' : 'these'}</button>
+            </div>
+          )}
+        </>
+      )}
     </Box>
   );
 }
@@ -255,20 +483,35 @@ function GitHubPanel({ gh }) {
 }
 
 // ---------------- Roles ----------------
-function RolesCard({ roles, city, myRoles, busy, error, onSuggest, onAdd, onRun, canSuggest }) {
+function RolesCard({ roles, city, myRoles, busy, error, onSuggest, onAdd, onRun, canSuggest, hasTested, stale, onTestAll }) {
   const mine = (t) => myRoles.some(r => r.toLowerCase() === t.toLowerCase());
   return (
     <Box
       id="roles"
       icon={Target}
       title="Roles that fit your skills"
-      openActions={(
+      openActions={(hasTested || roles?.length > 0) && (
         <button type="button" className="pg-btn" onClick={onSuggest} disabled={busy || !canSuggest}>
           {busy ? <Loader2 size={14} className="pg-spin" /> : <Sparkles size={14} />} {roles?.length ? 'Suggest again' : 'Suggest roles'}
         </button>
       )}
     >
-      <p className="pg-pp-note">Not sure what to apply for? Penguin suggests roles from your skills, test scores, resume and coding profiles. Add the ones you like — Penguin applies to them on your next run.</p>
+      <p className="pg-pp-note">
+        {hasTested
+          ? 'Based on your skill test: skills you scored well on count most, and weak ones show up as things to learn. Add the roles you like — Penguin applies to them on your next run.'
+          : 'Not sure what to apply for? Penguin suggests roles from how you do on the skill test, plus your resume and coding profiles.'}
+      </p>
+      {!hasTested && canSuggest && !roles?.length && (
+        <div className="pg-pp-testcta">
+          <span>Take the skill test first so the roles match how you actually did.</span>
+          <span className="pg-pp-cta-btns">
+            <button type="button" className="pg-btn pg-btn-ghost" onClick={onSuggest} disabled={busy}>{busy ? <Loader2 size={13} className="pg-spin" /> : null} Suggest without a test</button>
+            <button type="button" className="pg-btn pg-btn-primary" onClick={onTestAll}><ClipboardCheck size={14} /> Test my skills</button>
+          </span>
+        </div>
+      )}
+      {stale && !busy && <p className="pg-rq-message is-ok pg-pp-stale"><RefreshCw size={14} /> Your test scores changed since these suggestions. Click <strong>Suggest again</strong> to update them.</p>}
+      {busy && <p className="pg-pp-note"><Loader2 size={13} className="pg-spin" /> Finding roles that fit your results…</p>}
       {error && <p className="pg-rq-message is-error"><AlertTriangle size={14} /> {error}</p>}
       {!canSuggest && <p className="pg-mk-empty">Add a few skills first.</p>}
       {roles?.length > 0 && (
@@ -309,13 +552,14 @@ function RolesCard({ roles, city, myRoles, busy, error, onSuggest, onAdd, onRun,
  * profiles), LeetCode / Codeforces / CodeChef / GitHub analysis with charts, and role
  * suggestions the user can add to their search with one click.
  */
-export default function PenguinProfileTab({ profile, onSaveProfile, config, onSaveConfig, currentUser, onRun }) {
+export default function PenguinProfileTab({ profile, onSaveProfile, config, onSaveConfig, currentUser, onRun, onOpenVisoDsa }) {
   // Coding stats and role suggestions are kept in this browser (per user), not in the profile
   const STATS_KEY = `pg_coding_stats_${currentUser?.id || 'local'}`;
   const ROLES_KEY = `pg_role_suggestions_${currentUser?.id || 'local'}`;
   const [skills, setSkills] = useState(() => asSkillList(profile.skills));
   const [levels, setLevels] = useState(() => (profile.skillLevels && typeof profile.skillLevels === 'object' ? profile.skillLevels : {}));
   const [testing, setTesting] = useState(null);
+  const [assessing, setAssessing] = useState(false);
   const [links, setLinks] = useState(() => ({ leetcode: '', codeforces: '', codechef: '', github: '', ...(profile.codingProfiles || {}) }));
   const [stats, setStats] = useState(() => readLocal(STATS_KEY));
   const [analysing, setAnalysing] = useState(false);
@@ -356,13 +600,31 @@ export default function PenguinProfileTab({ profile, onSaveProfile, config, onSa
     persist(unique, nextLevels);
   };
 
-  const onTestDone = ({ pct }) => {
+  const tested = (pct, correct, total, at) => ({ level: levelFromScore(pct), score: pct, source: 'test', testedAt: at, correct, total });
+
+  const onTestDone = ({ pct, correct, total }) => {
     const skill = testing;
-    const nextLevels = { ...levels, [skill]: { level: levelFromScore(pct), score: pct, source: 'test', testedAt: new Date().toISOString() } };
+    const nextLevels = { ...levels, [skill]: tested(pct, correct, total, new Date().toISOString()) };
     const nextSkills = skills.some(s => sameSkill(s, skill)) ? skills : [...skills, skill];
     setLevels(nextLevels);
     setSkills(nextSkills);
     persist(nextSkills, nextLevels);
+  };
+
+  // Multi-skill test: score each skill from its own questions, then suggest roles from the result
+  const onAssessmentDone = ({ questions, answers }) => {
+    const per = {};
+    questions.forEach((q, i) => {
+      const r = (per[q.skill] ||= { correct: 0, total: 0 });
+      r.total += 1;
+      if (answers[i] === q.answer) r.correct += 1;
+    });
+    const at = new Date().toISOString();
+    const nextLevels = { ...levels };
+    for (const [skill, r] of Object.entries(per)) nextLevels[skill] = tested(Math.round((r.correct / r.total) * 100), r.correct, r.total, at);
+    setLevels(nextLevels);
+    persist(skills, nextLevels);
+    suggestRoles(nextLevels);
   };
 
   const analyse = async (refresh = false) => {
@@ -401,7 +663,7 @@ export default function PenguinProfileTab({ profile, onSaveProfile, config, onSa
   const myRoles = Array.isArray(config.searchQueries) && config.searchQueries.length ? config.searchQueries : [config.searchQuery].filter(Boolean);
   const city = (Array.isArray(config.locations) && config.locations[0]) || config.location || '';
 
-  const suggestRoles = async () => {
+  const suggestRoles = async (lv = levels) => {
     setSuggesting(true);
     setRolesError(null);
     try {
@@ -411,7 +673,7 @@ export default function PenguinProfileTab({ profile, onSaveProfile, config, onSa
         codechef: stats.codechef ? { rating: stats.codechef.rating, solved: stats.codechef.solved } : null,
         github: stats.github ? { languages: stats.github.languages, summary: stats.github.insights?.summary } : null,
       } : null;
-      const r = await post('/api/career/suggest', { skills: skills.map(s => ({ name: s, level: levels[s]?.level || null, score: levels[s]?.score ?? null })), coding, location: city });
+      const r = await post('/api/career/suggest', { skills: skills.map(s => ({ name: s, level: lv[s]?.level || null, score: lv[s]?.source === 'test' ? lv[s].score : null })), coding, location: city });
       const value = { city: r.city, roles: r.roles, at: new Date().toISOString() };
       setRoles(value);
       writeLocal(ROLES_KEY, value);
@@ -424,14 +686,16 @@ export default function PenguinProfileTab({ profile, onSaveProfile, config, onSa
     post('/api/config', { config: next }).catch(() => {});
   };
 
-  const tested = Object.values(levels).filter(l => l?.source === 'test').length;
+  const report = skillScores(skills, levels);
+  const lastTestAt = report.tested.reduce((m, t) => (t.testedAt > m ? t.testedAt : m), '');
 
   return (
     <FoldContext.Provider value={fold}>
     <div className="pg-pp">
       <Box id="summary" className="pg-pp-site pg-pp-overview" icon={BadgeCheck} title="At a glance">
       <div className="pg-pp-tiles pg-pp-summary">
-        <Tile label="Skills" value={skills.length} sub={`${tested} verified by a test`} />
+        <Tile label="Skills" value={skills.length} sub={`${report.tested.length} verified by a test`} />
+        <Tile label="Skill test" value={report.overall == null ? null : `${report.overall}%`} sub={report.rating?.label || 'Not taken yet'} />
         <Tile label="LeetCode solved" value={stats?.leetcode?.solved.all} sub={stats?.leetcode ? `${stats.leetcode.solved.hard} hard` : 'Not connected'} />
         <Tile label="Codeforces rating" value={stats?.codeforces?.rating} sub={stats?.codeforces?.rank || 'Not connected'} />
         <Tile label="CodeChef rating" value={stats?.codechef?.rating} sub={stats?.codechef?.stars ? `${stats.codechef.stars}★` : 'Not connected'} />
@@ -439,7 +703,9 @@ export default function PenguinProfileTab({ profile, onSaveProfile, config, onSa
       </div>
       </Box>
 
-      <SkillsCard skills={skills} levels={levels} onChange={changeSkills} onTest={setTesting} suggestions={suggestions} />
+      <SkillsCard skills={skills} levels={levels} onChange={changeSkills} onTest={setTesting} onTestAll={() => setAssessing(true)} suggestions={suggestions} />
+
+      <SkillReport skills={skills} levels={levels} onTestAll={() => setAssessing(true)} onTestOne={setTesting} onOpenVisoDsa={onOpenVisoDsa} />
 
       <RolesCard
         roles={roles?.roles}
@@ -447,10 +713,13 @@ export default function PenguinProfileTab({ profile, onSaveProfile, config, onSa
         myRoles={myRoles}
         busy={suggesting}
         error={rolesError}
-        onSuggest={suggestRoles}
+        onSuggest={() => suggestRoles()}
         onAdd={addRole}
         onRun={onRun}
         canSuggest={skills.length > 0}
+        hasTested={report.tested.length > 0}
+        stale={Boolean(roles?.at && lastTestAt && lastTestAt > roles.at)}
+        onTestAll={() => setAssessing(true)}
       />
 
       <Box
@@ -490,6 +759,15 @@ export default function PenguinProfileTab({ profile, onSaveProfile, config, onSa
           <div className="pg-modal pg-pp-test-modal" role="dialog" aria-modal="true" aria-label={`${testing} test`}>
             <button type="button" className="pg-icon-btn pg-pp-test-close" onClick={() => setTesting(null)} aria-label="Close test"><X size={16} /></button>
             <PenguinTest key={testing} fixedTopic={testing} onComplete={onTestDone} onCancel={() => setTesting(null)} />
+          </div>
+        </div>
+      )}
+
+      {assessing && (
+        <div className="pg-modal-backdrop">
+          <div className="pg-modal pg-pp-test-modal" role="dialog" aria-modal="true" aria-label="Skill test">
+            <button type="button" className="pg-icon-btn pg-pp-test-close" onClick={() => setAssessing(false)} aria-label="Close test"><X size={16} /></button>
+            <SkillAssessment skills={skills} levels={levels} onDone={onAssessmentDone} onClose={() => setAssessing(false)} />
           </div>
         </div>
       )}

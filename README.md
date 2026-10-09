@@ -408,11 +408,21 @@ For people who aren't sure which role to aim for.
   - Data & AI, Testing, CS fundamentals, Security, Design & product, Business & non-tech.
 
   Search across all of them, or type any skill that's missing.
-- **Suggested skills.** Skills from your resume and coding profiles, with **Add** and **Add all**.
-- **Test any skill.** A timed multiple-choice test on that skill. The score sets the skill's level:
-  - 90%+ Expert, 70%+ Advanced, 40%+ Intermediate, otherwise Beginner;
-  - tested skills show a verified badge with the score;
-  - a tested level is never overwritten by a guess from the resume or coding profiles.
+- **Suggested skills** have their own tab next to **Your skills**. Each suggestion comes from your resume or coding profiles, shows why it was suggested, and has **Add** (or **Add all**).
+- **Test my skills.** One timed test on the skills you picked (up to 10 at a time):
+  - choose the difficulty and 3, 5 or 8 questions per skill, at one minute per question;
+  - Penguin writes each skill's questions separately and shows which skills are ready;
+  - every question is labelled with its skill, and the review at the end has explanations.
+
+  Each skill can also be tested on its own with **Test** / **Retest**.
+- **Skill report.** Your score on each skill and overall, with a plain verdict:
+  - **Excellent** (90%+), **Very good** (70%+), **Good** (55%+), **Average** (40%+), **Poor** (below 40%);
+  - one line per skill, e.g. "You're excellent at React." or "You're poor at SQL right now. Start with the basics below, then retest.";
+  - the score also sets the skill's level (90%+ Expert, 70%+ Advanced, 40%+ Intermediate, otherwise Beginner), which a guess from the resume or coding profiles never overwrites.
+- **Learn what you missed.** Every skill under 70% gets learning links:
+  - **DSA** skills (data structures, algorithms, competitive programming) open **Viso DSA**, Agent Penguin's own visual DSA platform;
+  - other skills link to the best-known free resource (e.g. react.dev, SQLBolt, javascript.info, Kaggle Learn, AWS Skill Builder) plus video courses;
+  - the links live in [src/data/learningResources.js](src/data/learningResources.js).
 - **Coding profiles.** Paste LeetCode, Codeforces, CodeChef and GitHub links or usernames, then click **Analyse**:
   - **LeetCode:**
     - pie chart of Easy / Medium / Hard solved;
@@ -432,11 +442,12 @@ For people who aren't sure which role to aim for.
     - top repositories;
     - an AI summary of the profile with three ways to make it stronger.
 - **Skill levels from coding.** Your DSA, competitive programming, language and Git levels are worked out from these numbers, with the evidence shown.
-- **Roles that fit your skills.** The AI suggests 7 roles from your skills, test scores, resume and coding profiles. Each role shows:
-  - fit %, why it fits, the skills you have, and up to 3 to learn;
-  - seniority;
-  - live counts of new openings today and this week in your city.
+- **Roles that fit your skills, based on your test.** After the test, the AI suggests 7 roles from how you scored (plus your resume and coding profiles):
+  - skills you scored 70%+ on count as strengths;
+  - skills under 40% are never the basis for a role and show up as things to learn;
+  - each role shows fit %, why it fits, the skills you have, up to 3 to learn, seniority, and live counts of new openings today and this week in your city.
 
+  If your scores change, Penguin tells you to suggest again. Before any test, you can still suggest roles without one.
   **Add to my roles** puts a role into your search, and **Run Penguin** starts applying.
 - **Hide / Show** on every box, remembered in the browser.
 
@@ -449,6 +460,7 @@ For people who aren't sure which role to aim for.
   - a colour palette checked for colour blindness, with separate light and dark colours.
 
 **Files:**
+- [src/data/learningResources.js](src/data/learningResources.js)
 - [server/codingProfiles.js](server/codingProfiles.js)
 - [server/careerAdvisor.js](server/careerAdvisor.js)
 - [shared/skillsCatalog.js](shared/skillsCatalog.js)
