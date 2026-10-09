@@ -7,7 +7,7 @@ Around the agent there is everything a job seeker needs in one place:
 - **Inbox tracker:** reads your job emails and writes follow-ups.
 - **Automation:** scheduled runs and alerts on Telegram, WhatsApp or email.
 - **Mocks:** AI mock interviews and timed mock tests.
-- **Penguin Profile:** tests your skills, analyses your LeetCode, Codeforces, CodeChef and GitHub profiles, and suggests roles that fit you.
+- **Penguin Profile and Skill Test:** analyses your LeetCode, Codeforces, CodeChef and GitHub profiles, tests your skills, rates how you did, and suggests roles that fit you.
 
 > **Penguin AI** (the chat assistant on the home screen) is a separate product that lives in the same app. Everything else in this README is **Agent Penguin**.
 
@@ -32,7 +32,7 @@ Around the agent there is everything a job seeker needs in one place:
    - [Inbox tracker and follow-ups](#12-inbox-tracker-and-follow-ups)
    - [Automation: scheduled runs and alerts](#13-automation-scheduled-runs-and-alerts)
    - [Mocks](#14-mocks)
-   - [Penguin Profile](#15-penguin-profile)
+   - [Penguin Profile and Skill Test](#15-penguin-profile-and-skill-test)
    - [Penguin AI and other tools](#16-penguin-ai-and-other-tools)
    - [Admin console](#17-admin-console)
    - [Look and feel](#18-look-and-feel)
@@ -137,7 +137,7 @@ The **Profile** tab holds everything Penguin needs to fill in forms:
 | **Resume** | Upload a PDF or DOCX. Penguin attaches it to applications and analyses it. |
 | **Work details** | Experience, current role, notice period, current and expected CTC, degree, relocation |
 | **Links** | LinkedIn, GitHub, portfolio. Penguin only fills these into link fields. |
-| **Skills** | Your skill list, which is also shown and managed in Penguin Profile |
+| **Skills** | Your skill list, which is also shown and managed in Skill Test |
 | **Application questions** | Common questions answered once ("Why should we hire you?", "Tell us about yourself", CTC and more). Penguin reuses these answers. |
 | **Answers Penguin learned** | Answers you gave while finishing Needs-review jobs, which you can edit or delete |
 | **Job search preferences** | Roles, location, experience level and run limits |
@@ -399,9 +399,11 @@ Channel setup:
 
 **Tools:** the AI chain ([server/mocks.js](server/mocks.js)), the browser Web Speech API (`SpeechRecognition`, `speechSynthesis`).
 
-### 15. Penguin Profile
+### 15. Penguin Profile and Skill Test
 
-For people who aren't sure which role to aim for.
+For people who aren't sure which role to aim for. Two sections in the sidebar:
+- **Penguin Profile:** at a glance (skills, test score, coding stats) and the coding-profile analysis.
+- **Skill Test:** your skills, the skill test, the skill report and the roles that fit your results. **Open Skill Test** on Penguin Profile jumps there.
 
 - **Pick your skills** from a catalog of 12 groups:
   - Programming languages, Frontend, Backend, Mobile, Databases, Cloud & DevOps;
@@ -557,7 +559,7 @@ shared/                 Code used by both server and dashboard
   locations.js          Location helpers
 src/
   App.jsx               Routing, tabs, run controls, live events
-  components/           Tabs and pages (Applications, Profile, Penguin Profile, Mocks, Inbox, ...)
+  components/           Tabs and pages (Applications, Profile, Penguin Profile, Skill Test, Mocks, Inbox, ...)
   admin/                Admin console
   lib/                  Supabase client, authorised fetch, PDF export
   data/                 Sidebar tabs, mock-test topics and sites
@@ -584,7 +586,7 @@ All endpoints are on `http://localhost:3001`.
 | Automation | `GET /api/automation`, `POST /api/automation/schedule`, `POST /api/alerts/settings`, `POST /api/alerts/test`, `POST /api/alerts/telegram/detect` |
 | Inbox | `GET /api/inbox`, `POST /api/inbox/settings`, `POST /api/inbox/check`, `POST /api/followup/draft`, `POST /api/followup/send`, `POST /api/followup/skip` |
 | Mocks | `POST /api/mock/interview/question`, `POST /api/mock/interview/evaluate`, `POST /api/mock/interview/summary`, `POST /api/mock/test` |
-| Penguin Profile | `POST /api/coding/analyze`, `POST /api/career/suggest` |
+| Penguin Profile and Skill Test | `POST /api/coding/analyze`, `POST /api/career/suggest`, `POST /api/mock/test` |
 | Penguin AI | `POST /api/chat` |
 | Admin | `GET /api/me`, `GET /api/admin/overview`, `GET /api/admin/users`, `GET /api/admin/users/:id`, `POST /api/admin/users/:id/block`, `POST /api/admin/users/:id/role`, `DELETE /api/admin/users/:id`, `GET /api/admin/applications`, `DELETE /api/admin/applications/:id`, `GET /api/admin/system`, `POST /api/admin/agent/stop` |
 

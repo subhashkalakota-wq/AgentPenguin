@@ -9,7 +9,7 @@ import MarketInsights from './components/MarketInsights';
 import MocksTab from './components/MocksTab';
 import AutomationTab from './components/AutomationTab';
 import InboxTab from './components/InboxTab';
-import PenguinProfileTab from './components/PenguinProfileTab';
+import PenguinProfileTab, { SkillTestTab } from './components/PenguinProfileTab';
 import TabErrorBoundary from './components/TabErrorBoundary';
 import ReviewFinishModal from './components/ReviewFinishModal';
 import { searchLocations } from '../shared/locations';
@@ -80,6 +80,7 @@ export default function App() {
       case '/mocks':           return { view: 'dashboard', tab: 'mocks' };
       case '/inbox':           return { view: 'dashboard', tab: 'inbox' };
       case '/skills':          return { view: 'dashboard', tab: 'skills' };
+      case '/skill-test':      return { view: 'dashboard', tab: 'skilltest' };
       case '/automation':      return { view: 'dashboard', tab: 'automation' };
       case '/viso-dsa':        return { view: 'viso-dsa' };
       case '/resume-analyzer': return { view: 'resume-analyzer' };
@@ -912,8 +913,10 @@ export default function App() {
       case 'automation':
         return <AutomationTab />;
       case 'skills':
+      case 'skilltest': {
+        const Section = dashTab === 'skilltest' ? SkillTestTab : PenguinProfileTab;
         return (
-          <PenguinProfileTab
+          <Section
             profile={profile}
             onSaveProfile={handleSaveProfile}
             config={config}
@@ -921,8 +924,10 @@ export default function App() {
             currentUser={currentUser}
             onRun={isAgentActive ? null : handleStart}
             onOpenVisoDsa={() => navigateTo('/viso-dsa')}
+            onOpenSection={(sec) => openTab(sec === 'skills' ? 'skilltest' : 'skills')}
           />
         );
+      }
       case 'inbox':
         return (
           <InboxTab

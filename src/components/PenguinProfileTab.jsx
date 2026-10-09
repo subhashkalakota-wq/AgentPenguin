@@ -103,7 +103,7 @@ function SkillsCard({ skills, levels, onChange, onTest, onTestAll, suggestions }
       {tab === 'suggested' ? (
         <div className="pg-pp-suggest" role="tabpanel">
           {suggestions.length === 0 ? (
-            <p className="pg-mk-empty">No suggestions yet. Upload your resume in Profile or analyse your coding profiles below, and Penguin suggests skills from them.</p>
+            <p className="pg-mk-empty">No suggestions yet. Upload your resume in Profile, or analyse your coding profiles in Penguin Profile, and Penguin suggests skills from them.</p>
           ) : (
             <>
               <div className="pg-pp-suggest-head">
@@ -548,11 +548,13 @@ function RolesCard({ roles, city, myRoles, busy, error, onSuggest, onAdd, onRun,
 }
 
 /**
- * Penguin Profile: skills (picked from a catalog, levels from skill tests and coding
- * profiles), LeetCode / Codeforces / CodeChef / GitHub analysis with charts, and role
- * suggestions the user can add to their search with one click.
+ * Two sidebar sections share this component and its state:
+ * - Penguin Profile (section="profile"): at a glance, and LeetCode / Codeforces / CodeChef /
+ *   GitHub analysis with charts.
+ * - Skill Test (section="skills"): skills (picked from a catalog or suggested), one test on
+ *   them, the skill report with ratings and learning links, and roles from the results.
  */
-export default function PenguinProfileTab({ profile, onSaveProfile, config, onSaveConfig, currentUser, onRun, onOpenVisoDsa }) {
+export default function PenguinProfileTab({ section = 'profile', profile, onSaveProfile, config, onSaveConfig, currentUser, onRun, onOpenVisoDsa, onOpenSection }) {
   // Coding stats and role suggestions are kept in this browser (per user), not in the profile
   const STATS_KEY = `pg_coding_stats_${currentUser?.id || 'local'}`;
   const ROLES_KEY = `pg_role_suggestions_${currentUser?.id || 'local'}`;
@@ -573,17 +575,34 @@ export default function PenguinProfileTab({ profile, onSaveProfile, config, onSa
     toggle: (id) => setFolded(f => { const next = { ...f, [id]: !f[id] }; writeLocal(FOLD_KEY, next); return next; }),
   }), [folded]);
   const saveTimer = useRef(null);
+  const pendingSave = useRef(null);
   const profileRef = useRef(profile);
   profileRef.current = profile;
+  const saveRef = useRef(onSaveProfile);
+  saveRef.current = onSaveProfile;
 
-  // Save skill changes (debounced so quick picks are one save)
-  const persist = (nextSkills, nextLevels) => {
-    clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => {
-      onSaveProfile({ ...profileRef.current, skills: nextSkills, skillLevels: nextLevels });
-    }, 700);
+  // Save skill changes (debounced so quick picks are one save); a pending save is
+  // written straight away when the user leaves the section
+  const flushSave = () => {
+    if (!pendingSave.current) return;
+    const patch = pendingSave.current;
+    pendingSave.current = null;
+    saveRef.current({ ...profileRef.current, ...patch });
   };
-  useEffect(() => () => clearTimeout(saveTimer.current), []);
+  const persist = (nextSkills, nextLevels) => {
+    pendingSave.current = { skills: nextSkills, skillLevels: nextLevels };
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(flushSave, 700);
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => () => { clearTimeout(saveTimer.current); flushSave(); }, []);
+  // Follow skill changes saved elsewhere (the other section, the Profile tab) unless a
+  // change made here is still waiting to be saved
+  useEffect(() => {
+    if (pendingSave.current) return;
+    setSkills(asSkillList(profile.skills));
+    setLevels(profile.skillLevels && typeof profile.skillLevels === 'object' ? profile.skillLevels : {});
+  }, [profile.skills, profile.skillLevels]);
 
   const changeSkills = (nextSkills, levelPatch = {}) => {
     const unique = nextSkills.filter((s, i) => nextSkills.findIndex(x => sameSkill(x, s)) === i);
@@ -644,7 +663,7 @@ export default function PenguinProfileTab({ profile, onSaveProfile, config, onSa
 
   // Analyse saved links once when the tab opens without results
   useEffect(() => {
-    if (!stats && Object.values(profile.codingProfiles || {}).some(Boolean)) analyse(false);
+    if (section === 'profile' && !stats && Object.values(profile.codingProfiles || {}).some(Boolean)) analyse(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -692,7 +711,15 @@ export default function PenguinProfileTab({ profile, onSaveProfile, config, onSa
   return (
     <FoldContext.Provider value={fold}>
     <div className="pg-pp">
-      <Box id="summary" className="pg-pp-site pg-pp-overview" icon={BadgeCheck} title="At a glance">
+      {section === 'profile' && (
+      <>
+      <Box
+        id="summary"
+        className="pg-pp-site pg-pp-overview"
+        icon={BadgeCheck}
+        title="At a glance"
+        openActions={onOpenSection && <button type="button" className="pg-btn" onClick={() => onOpenSection('skills')}><ClipboardCheck size={13} /> Open Skill Test</button>}
+      >
       <div className="pg-pp-tiles pg-pp-summary">
         <Tile label="Skills" value={skills.length} sub={`${report.tested.length} verified by a test`} />
         <Tile label="Skill test" value={report.overall == null ? null : `${report.overall}%`} sub={report.rating?.label || 'Not taken yet'} />
@@ -702,7 +729,11 @@ export default function PenguinProfileTab({ profile, onSaveProfile, config, onSa
         <Tile label="GitHub repos" value={stats?.github?.publicRepos?.toLocaleString('en-IN')} sub={stats?.github ? `${stats.github.stars.toLocaleString('en-IN')} stars` : 'Not connected'} />
       </div>
       </Box>
+      </>
+      )}
 
+      {section === 'skills' && (
+      <>
       <SkillsCard skills={skills} levels={levels} onChange={changeSkills} onTest={setTesting} onTestAll={() => setAssessing(true)} suggestions={suggestions} />
 
       <SkillReport skills={skills} levels={levels} onTestAll={() => setAssessing(true)} onTestOne={setTesting} onOpenVisoDsa={onOpenVisoDsa} />
@@ -721,7 +752,11 @@ export default function PenguinProfileTab({ profile, onSaveProfile, config, onSa
         stale={Boolean(roles?.at && lastTestAt && lastTestAt > roles.at)}
         onTestAll={() => setAssessing(true)}
       />
+      </>
+      )}
 
+      {section === 'profile' && (
+      <>
       <Box
         id="coding"
         icon={Code2}
@@ -753,6 +788,8 @@ export default function PenguinProfileTab({ profile, onSaveProfile, config, onSa
           {stats.github && <GitHubPanel gh={stats.github} />}
         </div>
       )}
+      </>
+      )}
 
       {testing && (
         <div className="pg-modal-backdrop">
@@ -774,4 +811,9 @@ export default function PenguinProfileTab({ profile, onSaveProfile, config, onSa
     </div>
     </FoldContext.Provider>
   );
+}
+
+/** Skill Test section in the sidebar: same component, skills / test / report / roles. */
+export function SkillTestTab(props) {
+  return <PenguinProfileTab {...props} section="skills" />;
 }
