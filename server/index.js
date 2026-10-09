@@ -15,6 +15,8 @@ import { notify, publicSettings, updateSettings, sendTest, detectTelegramChat, a
 import { startScheduler, normalizeSchedule, nextRunLabel } from './scheduler.js';
 import { applyNaukriJob, applyIndeedJob } from './boardAppliers.js';
 import { createInbox, inboxSettings, updateInboxSettings } from './inbox.js';
+import { analyzeCodingProfiles } from './codingProfiles.js';
+import { suggestRoles } from './careerAdvisor.js';
 import { emailAccount } from './notifier.js';
 import { nextInterviewQuestion, evaluateAnswer, interviewSummary, generateTest } from './mocks.js';
 import { filterJobsWithLLM } from './llmFilter.js';
@@ -938,6 +940,31 @@ app.post('/api/inbox/check', inboxRoute(() => inbox.check({ reason: 'manual' }))
 app.post('/api/followup/draft', inboxRoute((b) => inbox.draftFollowUp(b.jobId)));
 app.post('/api/followup/send', inboxRoute((b) => inbox.sendFollowUp(b)));
 app.post('/api/followup/skip', inboxRoute((b) => inbox.skipFollowUp(b.jobId)));
+
+// ---------- Penguin Profile: coding profiles and role suggestions ----------
+app.post('/api/coding/analyze', async (req, res) => {
+  try {
+    const { links = {}, refresh = false } = req.body || {};
+    res.json(await analyzeCodingProfiles(links, { refresh: Boolean(refresh) }));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/career/suggest', async (req, res) => {
+  try {
+    const b = req.body || {};
+    res.json(await suggestRoles({
+      skills: Array.isArray(b.skills) ? b.skills : [],
+      resume: candidateProfile.resumeAnalysis || null,
+      coding: b.coding || null,
+      location: b.location || searchLocations(config)[0] || candidateProfile.location || '',
+      experienceYears: candidateProfile.resumeAnalysis?.totalExperienceYears ?? candidateProfile.experienceYears ?? null,
+    }));
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
 
 // ---------- Mocks: AI interviews and tests ----------
 const mockRoute = (fn) => async (req, res) => {

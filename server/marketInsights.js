@@ -103,7 +103,7 @@ function mergeNews(lists, max, { offTopic = true } = {}) {
 }
 
 // ---- Openings & hiring companies (LinkedIn) ----
-async function openingsCount(role, city, tpr) {
+export async function openingsCount(role, city, tpr) {
   const html = await linkedin(`https://www.linkedin.com/jobs/search?keywords=${encodeURIComponent(shortRole(role))}&location=${encodeURIComponent(city)}&f_TPR=${tpr}`);
   const raw = html.match(/results-context-header__job-count">([^<]*)/)?.[1]?.trim();
   if (!raw) return null;

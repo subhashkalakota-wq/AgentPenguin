@@ -9,6 +9,7 @@ import MarketInsights from './components/MarketInsights';
 import MocksTab from './components/MocksTab';
 import AutomationTab from './components/AutomationTab';
 import InboxTab from './components/InboxTab';
+import PenguinProfileTab from './components/PenguinProfileTab';
 import ReviewFinishModal from './components/ReviewFinishModal';
 import { searchLocations } from '../shared/locations';
 import PenguinWelcome from './components/PenguinWelcome';
@@ -77,6 +78,7 @@ export default function App() {
       case '/cdp':             return { view: 'dashboard', tab: 'cdp' };
       case '/mocks':           return { view: 'dashboard', tab: 'mocks' };
       case '/inbox':           return { view: 'dashboard', tab: 'inbox' };
+      case '/skills':          return { view: 'dashboard', tab: 'skills' };
       case '/automation':      return { view: 'dashboard', tab: 'automation' };
       case '/viso-dsa':        return { view: 'viso-dsa' };
       case '/resume-analyzer': return { view: 'resume-analyzer' };
@@ -908,6 +910,17 @@ export default function App() {
         return <MocksTab roles={Array.isArray(config.searchQueries) && config.searchQueries.length ? config.searchQueries : [config.searchQuery].filter(Boolean)} />;
       case 'automation':
         return <AutomationTab />;
+      case 'skills':
+        return (
+          <PenguinProfileTab
+            profile={profile}
+            onSaveProfile={handleSaveProfile}
+            config={config}
+            onSaveConfig={handleSaveConfig}
+            currentUser={currentUser}
+            onRun={isAgentActive ? null : handleStart}
+          />
+        );
       case 'inbox':
         return (
           <InboxTab
